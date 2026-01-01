@@ -25,30 +25,19 @@ access_token = os.environ.get("TWITTER_ACCESS_TOKEN")
 access_token_secret = os.environ.get("TWITTER_ACCESS_TOKEN_SECRET")
 
 # ==========================================
-# 2. X API v2 手動アップロード関数
+# 2. X API v2 手動アップロード関数 (強化版)
 # ==========================================
 def upload_media_v2(filename, consumer_key, consumer_secret, access_token, access_token_secret):
     """
     Tweepyを使わず、requestsで直接API v2のエンドポイントを叩いて画像をアップロードする関数
+    (待機処理強化版)
     """
     auth = OAuth1(consumer_key, consumer_secret, access_token, access_token_secret)
     file_size = os.path.getsize(filename)
     
-    # --- Step 1: Initialize (準備) ---
-    init_url = "https://api.twitter.com/2/media/upload/initialize"
-    # ※APIの仕様変更に備え、v1.1とv2の両方の可能性を考慮したURL構造を採用する場合もありますが、
-    # ここでは最新のv2パス仕様（パスパラメータ形式）を想定しつつ、
-    # 万が一のために従来のクエリ形式でも通る最も堅牢なリクエストを作ります。
-    # 2026年現在は v2 移行が進んでいるため、multipart/form-data で送るのが確実です。
-    
-    # 念のため v1.1 のURLも試せるように予備知識として持っておきますが、
-    # ここでは「アップロード」に関しては実はまだ v1.1 のURL (upload.twitter.com) が
-    # v2認証でも生きているケースが多いため、まずは最も成功率の高い「upload.twitter.com」を
-    # v2の認証ヘッダーで叩く方式を採用します。（これが一番 "403" を回避できます）
-    
     url = "https://upload.twitter.com/1.1/media/upload.json"
     
-    # INIT
+    # --- Step 1: INIT ---
     init_data = {
         "command": "INIT",
         "total_bytes": file_size,
@@ -59,17 +48,17 @@ def upload_media_v2(filename, consumer_key, consumer_secret, access_token, acces
     print("📤 [v2] Upload Step 1: INIT")
     res_init = requests.post(url, data=init_data, auth=auth)
     
-    if res_init.status_code != 200 and res_init.status_code != 202:
+    if res_init.status_code not in [200, 202]:
         print(f"❌ INIT Failed: {res_init.text}")
-        raise Exception("Media Upload INIT Failed")
+        raise Exception(f"Media Upload INIT Failed: {res_init.status_code}")
         
     media_id = res_init.json()['media_id_string']
+    print(f"   Media ID Issued: {media_id}")
     
-    # --- Step 2: Append (送信) ---
-    print(f"📤 [v2] Upload Step 2: APPEND (ID: {media_id})")
+    # --- Step 2: APPEND ---
+    print(f"📤 [v2] Upload Step 2: APPEND")
     
     with open(filename, 'rb') as f:
-        # 分割アップロード（念のため）
         segment_id = 0
         while True:
             chunk = f.read(4 * 1024 * 1024) # 4MB chunk
@@ -91,7 +80,7 @@ def upload_media_v2(filename, consumer_key, consumer_secret, access_token, acces
             
             segment_id += 1
 
-    # --- Step 3: Finalize (完了) ---
+    # --- Step 3: FINALIZE ---
     print("📤 [v2] Upload Step 3: FINALIZE")
     finalize_data = {
         "command": "FINALIZE",
@@ -104,27 +93,51 @@ def upload_media_v2(filename, consumer_key, consumer_secret, access_token, acces
         print(f"❌ FINALIZE Failed: {res_fin.text}")
         raise Exception("Media Upload FINALIZE Failed")
     
-    # 処理待ちが必要な場合への対応
-    fin_json = res_fin.json()
-    if 'processing_info' in fin_json:
-        state = fin_json['processing_info']['state']
-        while state == 'in_progress' or state == 'pending':
-            check_secs = fin_json['processing_info'].get('check_after_secs', 1)
-            print(f"⏳ Processing... wait {check_secs}s")
-            time.sleep(check_secs)
+    # --- Step 4: STATUS CHECK (ここを強化) ---
+    print(f"⏳ Waiting for media processing (ID: {media_id})...")
+    
+    # 念のため最初に強制待機
+    time.sleep(5)
+    
+    check_url = "https://upload.twitter.com/1.1/media/upload.json"
+    status_params = {
+        "command": "STATUS",
+        "media_id": media_id
+    }
+    
+    # 最大10回 (約30秒) 確認するループ
+    for i in range(10):
+        res_status = requests.get(check_url, params=status_params, auth=auth)
+        
+        # ステータス情報が取得できない場合（即時完了）も考慮
+        if res_status.status_code != 200:
+             # エラーではなく、情報がないだけなら成功とみなして抜ける手もあるが、念のため待つ
+             print(f"   Status check {i+1}: No info yet, waiting...")
+             time.sleep(3)
+             continue
+             
+        status_data = res_status.json()
+        processing_info = status_data.get('processing_info', {})
+        state = processing_info.get('state')
+        
+        print(f"   Status check {i+1}: {state if state else 'succeeded (completed)'}")
+        
+        if state == 'succeeded' or not state:
+            print("✅ Media processing completed!")
+            return media_id
+        
+        elif state == 'failed':
+            error = processing_info.get('error', {})
+            raise Exception(f"Media processing failed: {error}")
             
-            status_params = {
-                "command": "STATUS",
-                "media_id": media_id
-            }
-            res_status = requests.get(url, params=status_params, auth=auth)
-            fin_json = res_status.json()
-            state = fin_json['processing_info']['state']
+        elif state == 'in_progress' or state == 'pending':
+            wait_secs = processing_info.get('check_after_secs', 2)
+            time.sleep(wait_secs)
+        else:
+            time.sleep(3)
             
-            if state == 'failed':
-                 raise Exception(f"Media processing failed: {fin_json}")
-
-    print("✅ Image Uploaded Successfully!")
+    # ループを抜けてもここに来る場合はタイムアウトだが、IDは返す
+    print("⚠️ Warning: Status check timed out, but proceeding...")
     return media_id
 
 # ==========================================
@@ -433,6 +446,8 @@ try:
         # 2. 手動アップロード (Tweepyを使わずv2エンドポイントを叩く)
         media_id = upload_media_v2(image_file, consumer_key, consumer_secret, access_token, access_token_secret)
         
+        print(f"✅ Ready to tweet with Media ID: {media_id}")
+
         # 3. v2でツイート (media_idを添付)
         client = tweepy.Client(
             consumer_key=consumer_key, consumer_secret=consumer_secret,
@@ -441,7 +456,8 @@ try:
         
         tweet_text = f"""📊 東京湾釣果予測 ({tomorrow.strftime('%m/%d')})
 
-明日のおすすめポイント＆AIアドバイス！
+【釣行判断AI】
+明日釣りに行こうか迷っている方へAIがアドバイス!!
 画像で詳細をチェック👇
 
 Web版: https://tokyo-bay-fishing-ai-ypd33onggtcjxnh69ryijz.streamlit.app/
