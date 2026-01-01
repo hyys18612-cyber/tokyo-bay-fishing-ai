@@ -6,3 +6,5 @@ requests
 geopy
 openpyxl
 scikit-learn
+xgboost
+lightgbm
