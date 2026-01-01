@@ -13,43 +13,30 @@ import requests
 from logic import FishingPredictor, MAP_EXTENT, VISUAL_OFFSETS
 
 # -------------------------------------------
-# 0. 日本語フォント設定 (クラウド対応・安全版)
+# 0. 日本語フォント設定 (IPAexゴシック版)
 # -------------------------------------------
 def setup_japanese_font():
-    font_path = "NotoSansJP-Regular.ttf"
-    # Google FontsのStatic(静的)ファイルの正確なURL
-    font_url = "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansjp/static/NotoSansJP-Regular.ttf"
-    
-    # すでにファイルがあるが、サイズがおかしい(エラーHTML等)場合は削除
-    if os.path.exists(font_path):
-        if os.path.getsize(font_path) < 1024: # 1KB以下ならゴミデータとみなす
-            os.remove(font_path)
+    # 安定して動作するIPAexゴシックを使用
+    font_path = "ipaexg.ttf"
+    font_url = "https://raw.githubusercontent.com/minoryorg/ipaex-font/master/ipaexg.ttf"
 
     # フォントファイルがなければダウンロード
     if not os.path.exists(font_path):
         try:
             res = requests.get(font_url, timeout=10)
-            if res.status_code == 200:
-                with open(font_path, "wb") as f:
-                    f.write(res.content)
-            else:
-                print(f"Font download failed: {res.status_code}")
+            with open(font_path, "wb") as f:
+                f.write(res.content)
         except Exception as e:
-            print(f"Font download error: {e}")
+            st.error(f"フォントのダウンロードに失敗しました: {e}")
+            return
 
-    # フォントをMatplotlibに登録 (失敗してもアプリは落とさない)
-    if os.path.exists(font_path) and os.path.getsize(font_path) > 1024:
+    # フォントをMatplotlibに登録
+    if os.path.exists(font_path):
         try:
             fm.fontManager.addfont(font_path)
-            plt.rcParams['font.family'] = 'Noto Sans JP'
+            plt.rcParams['font.family'] = 'IPAexGothic'
         except Exception as e:
-            print(f"Font add error: {e}")
-            # フォント設定に失敗した場合のフォールバック
-            system = platform.system()
-            if system == 'Windows':
-                plt.rcParams['font.family'] = ['Meiryo', 'Yu Gothic']
-            elif system == 'Darwin':
-                plt.rcParams['font.family'] = ['Hiragino Sans', 'AppleGothic']
+            st.warning(f"フォント設定エラー: {e}")
 
 # アプリ起動時に実行
 setup_japanese_font()
@@ -73,7 +60,7 @@ WHITE = "#ffffff"
 # カスタムCSS
 st.markdown(f"""
 <style>
-    /* Google Fonts (Web表示用) */
+    /* UI用のフォント設定（ブラウザ用） */
     @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700;900&display=swap');
     
     html, body, [class*="css"] {{
