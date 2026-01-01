@@ -5,6 +5,7 @@ import matplotlib.patheffects as pe
 import matplotlib.image as mpimg
 import datetime
 import platform
+import japanize_matplotlib
 
 # ロジックファイルからクラスをインポート
 from logic import FishingPredictor, MAP_EXTENT, VISUAL_OFFSETS
@@ -470,4 +471,5 @@ if execute_btn:
 """, unsafe_allow_html=True)
             
             with st.expander("📋 データ一覧を表示"):
+
                 st.dataframe(df_period[['date', 'rank', 'total_cpue', 'weather', 'wind', 'temp']], use_container_width=True)
