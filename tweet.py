@@ -5,14 +5,8 @@ import pandas as pd
 import joblib
 import requests
 import numpy as np
-import json
-import time
-from requests_oauthlib import OAuth1
-from geopy.geocoders import Nominatim
 import warnings
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
-import matplotlib.font_manager as fm
+from geopy.geocoders import Nominatim
 
 warnings.filterwarnings('ignore')
 
@@ -25,97 +19,7 @@ access_token = os.environ.get("TWITTER_ACCESS_TOKEN")
 access_token_secret = os.environ.get("TWITTER_ACCESS_TOKEN_SECRET")
 
 # ==========================================
-# 2. X API v2 新・画像アップロード関数 (2025以降対応)
-# ==========================================
-def upload_media_v2_native(filename, consumer_key, consumer_secret, access_token, access_token_secret):
-    """
-    完全なAPI v2エンドポイントのみを使用して画像をアップロードする関数
-    (廃止されたv1.1は一切使用しません)
-    """
-    auth = OAuth1(consumer_key, consumer_secret, access_token, access_token_secret)
-    file_size = os.path.getsize(filename)
-    media_type = "image/png"
-    
-    # ---------------------------------------------------------
-    # Step 1: INITIALIZE (アップロード準備)
-    # URL: https://api.twitter.com/2/media/upload/initialize
-    # ---------------------------------------------------------
-    init_url = "https://api.twitter.com/2/media/upload/initialize"
-    
-    # v2はJSONボディで送るのが一般的
-    init_data = {
-        "command": "INIT",
-        "total_bytes": file_size,
-        "media_type": media_type,
-        "media_category": "tweet_image"
-    }
-    
-    print(f"📤 [v2] Step 1: INIT ({init_url})")
-    # 注意: v2の新しいuploadはJSONデータを受け取る仕様に変更されている可能性がありますが、
-    # 互換性のためform-data形式も受け付けることが多いです。まずはrequestsのdata引数(form)で送ります。
-    res_init = requests.post(init_url, data=init_data, auth=auth)
-    
-    if res_init.status_code not in [200, 201, 202]:
-        print(f"❌ INIT Failed: {res_init.status_code} {res_init.text}")
-        raise Exception(f"v2 INIT Failed: {res_init.text}")
-        
-    media_id = res_init.json()['media_id_string']
-    print(f"   Media ID Issued: {media_id}")
-    
-    # ---------------------------------------------------------
-    # Step 2: APPEND (画像の送信)
-    # URL: https://api.twitter.com/2/media/upload/{id}/append
-    # ---------------------------------------------------------
-    append_url = f"https://api.twitter.com/2/media/upload/{media_id}/append"
-    print(f"📤 [v2] Step 2: APPEND ({append_url})")
-    
-    with open(filename, 'rb') as f:
-        segment_id = 0
-        while True:
-            chunk = f.read(4 * 1024 * 1024) # 4MB chunk
-            if not chunk:
-                break
-            
-            # v2のAPPENDはパスパラメータにIDが含まれるため、bodyにはsegment_indexとmediaだけ送る
-            files = {'media': chunk}
-            data = {'segment_index': segment_id}
-            
-            res_append = requests.post(append_url, data=data, files=files, auth=auth)
-            
-            if res_append.status_code < 200 or res_append.status_code >= 300:
-                print(f"❌ APPEND Failed: {res_append.status_code} {res_append.text}")
-                raise Exception("v2 APPEND Failed")
-            
-            segment_id += 1
-
-    # ---------------------------------------------------------
-    # Step 3: FINALIZE (完了通知)
-    # URL: https://api.twitter.com/2/media/upload/{id}/finalize
-    # ---------------------------------------------------------
-    finalize_url = f"https://api.twitter.com/2/media/upload/{media_id}/finalize"
-    print(f"📤 [v2] Step 3: FINALIZE ({finalize_url})")
-    
-    # v2のFINALIZEはパスにIDがあるため、bodyは空でも良い場合があるが、念のためcommandを送るか空を送る
-    # 多くの実装ではシンプルなPOSTでOK
-    res_fin = requests.post(finalize_url, auth=auth)
-    
-    if res_fin.status_code < 200 or res_fin.status_code >= 300:
-        print(f"❌ FINALIZE Failed: {res_fin.status_code} {res_fin.text}")
-        raise Exception("v2 FINALIZE Failed")
-    
-    # ---------------------------------------------------------
-    # Step 4: STATUS (処理待ち)
-    # ---------------------------------------------------------
-    print(f"⏳ Waiting for processing...")
-    time.sleep(5) # とりあえず待つ
-    
-    # 処理状態の確認が必要な場合はここに追加するが、静止画なら通常は即完了する
-    
-    print("✅ Upload Completed (v2 Native)")
-    return media_id
-
-# ==========================================
-# 3. 設定エリア & ロジック
+# 2. 設定エリア
 # ==========================================
 TARGET_AREAS = [
     ("浦安", "浦安（夢の島・若洲）"),
@@ -146,31 +50,43 @@ MODELS_CONFIG = {
     "salt": "sub/salt_model.pkl", "do": "sub/do_model.pkl"
 }
 
-# --- ヘルパー関数 ---
-def get_angler_comment(row_data, g_cpue_dict):
+# ==========================================
+# 3. ロジック関数群
+# ==========================================
+def get_short_reason(row_data, g_cpue_dict):
+    """
+    ツイート用に短くパンチのある理由を生成する
+    """
     wind = row_data['風速(m/s)']
     rain = row_data.get('降水量(mm)', 0)
-    temp_diff = row_data.get('前日水温差', 0)
     total_cpue = row_data['★総釣果(CPUE)']
-    if wind >= 8.0: return "⚠ 強風予報！安全第一で撤退も勇気"
-    if rain >= 5.0: return "☔ 本降り予報。雨具必須、足元注意"
-    if total_cpue >= 20.0: return "★爆釣警報！クーラー満タンの準備を"
-    if g_cpue_dict.get('G2', 0) >= 0.5: return "大物チャンス！ルアー・泳がせで攻めろ"
-    if g_cpue_dict.get('G1', 0) >= 8.0: return "◎ アジ・イワシ回遊！サビキで手堅く"
-    if g_cpue_dict.get('G3', 0) >= 1.5: return "底物が熱い！投げ釣りでじっくり探れ"
-    if temp_diff <= -0.5: return "水温低下中。活性低いなら深場・ボトムへ"
-    if temp_diff >= 0.5: return "水温上昇！浅場の高活性な個体を狙え"
-    if total_cpue >= 10.0: return "好条件！色々な魚種が狙える一日"
-    if total_cpue <= 3.0: return "我慢の展開。潮の変わり目に集中しよう"
-    return "エンジョイフィッシング！一発逆転を狙え"
+    
+    # 1. ネガティブ要因（最優先）
+    if wind >= 8.0: return "⚠️強風！安全第一で"
+    if rain >= 5.0: return "☔雨天注意"
+    if total_cpue <= 1.5: return "🙏修行の予感…"
 
-def evaluate_cpue_total_scaled(val):
-    if val >= 20.0: return "S (爆釣)"
-    if val >= 10.0: return "A (好調)"
-    if val >= 4.0: return "B (普通)"
-    if val >= 1.2: return "C (渋い)"
-    return "D (激渋)"
+    # 2. ポジティブ要因（魚種別）
+    # G1: アジ・イワシ・サバ
+    if g_cpue_dict.get('G1', 0) >= 8.0: return "🐟アジ・サバ爆釣!?"
+    # G2: シーバス・タチウオ
+    if g_cpue_dict.get('G2', 0) >= 0.5: return "🔥シーバス狙い目"
+    # G3: カレイ・キス・カサゴ
+    if g_cpue_dict.get('G3', 0) >= 1.5: return "🎣底物が熱い！"
+    
+    # 3. その他
+    if total_cpue >= 10.0: return "✨全体的に高活性"
+    
+    return "🧐ワンチャンあるかも"
 
+def evaluate_cpue_rank(val):
+    if val >= 20.0: return "S"
+    if val >= 10.0: return "A"
+    if val >= 4.0: return "B"
+    if val >= 1.2: return "C"
+    return "D"
+
+# --- 以下、共通ロジック (省略なし) ---
 def match_features(model, available_data):
     try:
         if hasattr(model, 'feature_name_'): required_cols = model.feature_name_
@@ -259,63 +175,8 @@ def safe_encode(encoder, val):
     try: return encoder.transform([val])[0]
     except: return 0 
 
-# --- 画像生成関数 ---
-def generate_fishing_card(card_data_list, target_date_str):
-    print("\n🎨 予報カード画像を生成中...")
-    
-    font_path = "ipaexg.ttf"
-    if os.path.exists(font_path):
-        fm.fontManager.addfont(font_path)
-        plt.rcParams['font.family'] = 'IPAexGothic'
-    else:
-        plt.rcParams['font.family'] = 'sans-serif'
-            
-    fig, ax = plt.subplots(figsize=(10, 6.5))
-    fig.patch.set_facecolor('#f0f8ff')
-    ax.set_facecolor('#f0f8ff')
-    ax.axis('off')
-
-    dt = datetime.datetime.strptime(target_date_str, "%Y-%m-%d")
-    date_display = dt.strftime("%Y/%m/%d (%a)")
-    
-    plt.text(0.5, 0.93, '東京湾 釣果予測AI', ha='center', va='center', fontsize=22, fontweight='bold', color='#003366')
-    plt.text(0.5, 0.85, f'Target Date: {date_display}', ha='center', va='center', fontsize=13, color='#444444')
-
-    y_positions = [0.65, 0.40, 0.15]
-    colors = {'A (好調)': '#ffcccc', 'B (普通)': '#fff5cc', 'C (渋い)': '#e6f2ff', 'D (激渋)': '#f0f0f0', 'S (爆釣)': '#ff9999'}
-    text_colors = {'A (好調)': '#cc0000', 'B (普通)': '#996600', 'C (渋い)': '#003399', 'D (激渋)': '#666666', 'S (爆釣)': '#cc0000'}
-
-    for i, item in enumerate(card_data_list):
-        if i >= 3: break
-        y = y_positions[i]
-        area_label = item['area_label']
-        row_data = item['data']
-        comment = item['ai_comment']
-        
-        rect = patches.FancyBboxPatch((0.05, y - 0.1), 0.9, 0.2, boxstyle="round,pad=0.02", linewidth=1, edgecolor='#cccccc', facecolor='white')
-        ax.add_patch(rect)
-        plt.text(0.1, y + 0.03, area_label, fontsize=16, fontweight='bold', color='#333333', va='center')
-        judge = row_data['総合判定']
-        bg_c = colors.get(judge, '#ffffff')
-        txt_c = text_colors.get(judge, '#000000')
-        v_rect = patches.FancyBboxPatch((0.55, y - 0.08), 0.35, 0.16, boxstyle="round,pad=0.02", linewidth=0, facecolor=bg_c)
-        ax.add_patch(v_rect)
-        judge_short = judge.split(' ')[0]
-        judge_jp = judge.split(' ')[1].replace('(', '').replace(')', '')
-        plt.text(0.725, y + 0.03, f"{judge_short} {judge_jp}", ha='center', va='center', fontsize=20, fontweight='bold', color=txt_c)
-        details = f"天気: {row_data['天気']} | 風: {row_data['風速(m/s)']}m | 水温: {row_data['水温(℃)']}℃ | 総合CPUE: {row_data['★総釣果(CPUE)']}"
-        plt.text(0.1, y - 0.05, details, fontsize=11, color='#555555', va='center')
-        plt.text(0.725, y - 0.04, comment, ha='center', va='center', fontsize=11, fontweight='bold', color='#d9534f')
-
-    plt.text(0.5, 0.02, 'Powered by Python & Fishing Forecast Model', ha='center', va='center', fontsize=10, color='#888888')
-    plt.tight_layout()
-    filename = 'fishing_forecast_card.png'
-    plt.savefig(filename, dpi=150)
-    plt.close()
-    return filename
-
 # ==========================================
-# 4. メイン処理
+# 4. メイン処理 (テキスト生成 -> ツイート)
 # ==========================================
 try:
     print("📂 モデル読み込み中...")
@@ -331,10 +192,13 @@ try:
     tomorrow = datetime.date.today() + datetime.timedelta(days=1)
     TARGET_DATE_STR = tomorrow.strftime("%Y-%m-%d")
     
-    card_data_list = []
+    # 曜日の日本語表記
+    weekdays = ["月", "火", "水", "木", "金", "土", "日"]
+    weekday_str = weekdays[tomorrow.weekday()]
+    
+    forecast_results = []
     
     for place_name, display_name in TARGET_AREAS:
-        print(f"\n🚀 {place_name} の予測開始...")
         coords = get_coordinates(place_name)
         if not coords: continue
 
@@ -385,7 +249,6 @@ try:
 
             sub_place = find_best_substitute(row, TARGET_DATE_STR, c_cache)
             g1_total = 0
-            fish_preds = {}
             g_cpue_sums = {}
             total_all_cpue = 0
             
@@ -398,48 +261,62 @@ try:
                     for fish in e['魚種'].classes_:
                         pool['魚種'] = safe_encode(e['魚種'], fish)
                         pred = max(0, m.predict(match_features(m, pool))[0])
-                        fish_preds[fish] = pred
                         g_sum += pred
                     g_cpue_sums[g_name] = g_sum
                     total_all_cpue += g_sum
             
-            grade = evaluate_cpue_total_scaled(total_all_cpue)
-            result_row = {
-                "日付": TARGET_DATE_STR, "天気": w_label, 
-                "風速(m/s)": round(row.get('wind_speed_10m_max', 0), 1),
-                "水温(℃)": round(pw, 1), "前日水温差": round(pw - current['water_temp'], 1),
-                "総合判定": grade, "★総釣果(CPUE)": round(total_all_cpue, 1)
-            }
-            comment = get_angler_comment(result_row, g_cpue_sums)
-            card_data_list.append({"area_label": display_name, "data": result_row, "ai_comment": comment})
+            # 結果格納
+            rank = evaluate_cpue_rank(total_all_cpue)
+            reason = get_short_reason({
+                '風速(m/s)': row.get('wind_speed_10m_max', 0),
+                '降水量(mm)': row.get('precipitation_sum', 0),
+                '★総釣果(CPUE)': total_all_cpue
+            }, g_cpue_sums)
+            
+            # 短い場所名を作る (浦安（夢の島...） -> 浦安)
+            short_name = place_name 
+            
+            forecast_results.append({
+                "name": short_name,
+                "full_name": display_name,
+                "rank": rank,
+                "reason": reason,
+                "cpue": total_all_cpue
+            })
 
-    if card_data_list:
-        # 1. 画像生成
-        image_file = generate_fishing_card(card_data_list, TARGET_DATE_STR)
+    # --- ツイート本文生成 ---
+    if forecast_results:
+        # CPUEが高い順に並び替え
+        forecast_results.sort(key=lambda x: x['cpue'], reverse=True)
+        best_spot = forecast_results[0]
         
-        # 2. 手動アップロード (完全v2版)
-        media_id = upload_media_v2_native(image_file, consumer_key, consumer_secret, access_token, access_token_secret)
+        # 本文組み立て
+        tweet_text = f"【釣行判断AI｜東京湾】\n\n"
+        tweet_text += f"明日（{tomorrow.strftime('%m/%d')}・{weekday_str}）\n"
+        tweet_text += f"釣りに行くか迷ってる人へ\n\n"
         
-        print(f"✅ Ready to tweet with Media ID: {media_id}")
+        for res in forecast_results:
+            # ランクの絵文字
+            rank_emoji = {'S':'🔥', 'A':'◎', 'B':'〇', 'C':'△', 'D':'☔'}.get(res['rank'], '・')
+            tweet_text += f"📍{res['name']}\n"
+            tweet_text += f"→ {res['rank']} ({res['reason']})\n\n"
+        
+        # 締めの言葉
+        tweet_text += f"明日は{best_spot['name']}がおすすめ！🐟\n"
+        tweet_text += f"👇詳細予報\n"
+        tweet_text += f"https://tokyo-bay-fishing-ai-ypd33onggtcjxnh69ryijz.streamlit.app/"
 
-        # 3. v2でツイート (media_idを添付)
+        print("📝 生成されたツイート:")
+        print(tweet_text)
+
+        # v2でツイート
         client = tweepy.Client(
             consumer_key=consumer_key, consumer_secret=consumer_secret,
             access_token=access_token, access_token_secret=access_token_secret
         )
+        client.create_tweet(text=tweet_text)
+        print("✅ ツイート成功！")
         
-        tweet_text = f"""📊 東京湾釣果予測 ({tomorrow.strftime('%m/%d')})
-
-【釣行判断AI】
-明日釣りに行こうか迷っている方へ
-画像で詳細をチェック👇
-
-Web版: https://tokyo-bay-fishing-ai-ypd33onggtcjxnh69ryijz.streamlit.app/
-
-#釣り #東京湾 #シーバス #アジング
-"""
-        client.create_tweet(text=tweet_text, media_ids=[media_id])
-        print("✅ カード画像付きツイート成功！ (v2 Native Upload)")
     else:
         print("❌ 予測データが生成されませんでした")
 
