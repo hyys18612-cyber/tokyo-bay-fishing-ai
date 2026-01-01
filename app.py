@@ -7,12 +7,32 @@ from matplotlib import font_manager as fm
 import datetime
 import platform
 import os
+import streamlit.components.v1 as components  # Google Analytics用
 
 # ロジックファイルからクラスをインポート
 from logic import FishingPredictor, MAP_EXTENT, VISUAL_OFFSETS
 
 # -------------------------------------------
-# 0. 日本語フォント設定 (完全オフライン対応版)
+# 0. Google Analytics 設定
+# -------------------------------------------
+def inject_ga():
+    # 提供された測定ID
+    GA_ID = "G-3L2NXKM7YT"
+    
+    ga_code = f"""
+    <script async src="https://www.googletagmanager.com/gtag/js?id={GA_ID}"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){{dataLayer.push(arguments);}}
+        gtag('js', new Date());
+        gtag('config', '{GA_ID}');
+    </script>
+    """
+    # HTMLとして埋め込む（高さ0で見えないようにする）
+    components.html(ga_code, height=0)
+
+# -------------------------------------------
+# 1. 日本語フォント設定 (完全オフライン対応版)
 # -------------------------------------------
 def setup_japanese_font():
     # GitHubにアップロードしたフォントファイルを指定
@@ -39,7 +59,7 @@ def setup_japanese_font():
 setup_japanese_font()
 
 # -------------------------------------------
-# 1. ページ設定 & デザインテーマ定義
+# 2. ページ設定 & デザインテーマ定義
 # -------------------------------------------
 st.set_page_config(
     page_title="東京湾釣り予報AI",
@@ -47,6 +67,9 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+
+# ▼ Google Analyticsを注入
+inject_ga()
 
 # カラーパレット定義
 PRIMARY = "#0e4d92"    # 濃い青
@@ -212,7 +235,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------
-# 2. ロジック初期化
+# 3. ロジック初期化 & ヘルパー
 # -------------------------------------------
 @st.cache_resource
 def load_predictor():
@@ -288,7 +311,7 @@ def plot_trend_chart(df, threshold=10.0):
     return fig
 
 # -------------------------------------------
-# 3. メインレイアウト
+# 4. メインレイアウト
 # -------------------------------------------
 
 st.markdown("""
@@ -349,7 +372,7 @@ with st.expander("🔎 検索条件を設定する", expanded=True):
             execute_btn = st.button("ベスト日程を探す 🔍", key="btn2")
 
 # -------------------------------------------
-# 4. 結果表示エリア
+# 5. 結果表示エリア
 # -------------------------------------------
 
 if execute_btn:
