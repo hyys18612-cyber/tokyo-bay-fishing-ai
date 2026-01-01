@@ -185,16 +185,6 @@ st.markdown(f"""
 # -------------------------------------------
 # 2. ヘルパー関数
 # -------------------------------------------
-def set_jp_font():
-    system = platform.system()
-    if system == 'Windows':
-        plt.rcParams['font.family'] = ['Meiryo', 'Yu Gothic', 'MS Gothic']
-    elif system == 'Darwin':
-        plt.rcParams['font.family'] = ['Hiragino Sans', 'AppleGothic']
-    else:
-        plt.rcParams['font.family'] = ['Noto Sans CJK JP', 'IPAexGothic']
-
-set_jp_font()
 
 @st.cache_resource
 def load_predictor():
@@ -473,3 +463,4 @@ if execute_btn:
             with st.expander("📋 データ一覧を表示"):
 
                 st.dataframe(df_period[['date', 'rank', 'total_cpue', 'weather', 'wind', 'temp']], use_container_width=True)
+
