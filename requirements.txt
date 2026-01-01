@@ -8,3 +8,4 @@ openpyxl
 scikit-learn
 xgboost
 lightgbm
+japanize-matplotlib
