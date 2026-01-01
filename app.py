@@ -7,36 +7,33 @@ from matplotlib import font_manager as fm
 import datetime
 import platform
 import os
-import requests
 
 # ロジックファイルからクラスをインポート
 from logic import FishingPredictor, MAP_EXTENT, VISUAL_OFFSETS
 
 # -------------------------------------------
-# 0. 日本語フォント設定 (IPAexゴシック版)
+# 0. 日本語フォント設定 (完全オフライン対応版)
 # -------------------------------------------
 def setup_japanese_font():
-    # 安定して動作するIPAexゴシックを使用
+    # GitHubにアップロードしたフォントファイルを指定
     font_path = "ipaexg.ttf"
-    font_url = "https://raw.githubusercontent.com/minoryorg/ipaex-font/master/ipaexg.ttf"
 
-    # フォントファイルがなければダウンロード
-    if not os.path.exists(font_path):
-        try:
-            res = requests.get(font_url, timeout=10)
-            with open(font_path, "wb") as f:
-                f.write(res.content)
-        except Exception as e:
-            st.error(f"フォントのダウンロードに失敗しました: {e}")
-            return
-
-    # フォントをMatplotlibに登録
+    # ファイルが存在するかチェックして登録
     if os.path.exists(font_path):
         try:
+            # フォントマネージャーに追加
             fm.fontManager.addfont(font_path)
+            # 追加したフォントをMatplotlibのデフォルトに設定
             plt.rcParams['font.family'] = 'IPAexGothic'
         except Exception as e:
-            st.warning(f"フォント設定エラー: {e}")
+            st.error(f"フォントの読み込みエラー: {e}")
+    else:
+        # 万が一ファイルがない場合のフォールバック（Windows/Mac用）
+        system = platform.system()
+        if system == 'Windows':
+            plt.rcParams['font.family'] = ['Meiryo', 'Yu Gothic']
+        elif system == 'Darwin':
+            plt.rcParams['font.family'] = ['Hiragino Sans', 'AppleGothic']
 
 # アプリ起動時に実行
 setup_japanese_font()
@@ -60,7 +57,7 @@ WHITE = "#ffffff"
 # カスタムCSS
 st.markdown(f"""
 <style>
-    /* UI用のフォント設定（ブラウザ用） */
+    /* Google Fonts (Web表示用) */
     @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700;900&display=swap');
     
     html, body, [class*="css"] {{
