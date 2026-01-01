@@ -3,12 +3,48 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patheffects as pe
 import matplotlib.image as mpimg
+from matplotlib import font_manager as fm
 import datetime
 import platform
-import japanize_matplotlib
+import os
+import requests
 
 # ロジックファイルからクラスをインポート
 from logic import FishingPredictor, MAP_EXTENT, VISUAL_OFFSETS
+
+# -------------------------------------------
+# 0. 日本語フォント設定 (クラウド対応版)
+# -------------------------------------------
+def setup_japanese_font():
+    # Google FontsからNoto Sans JPをダウンロード
+    font_url = "https://github.com/google/fonts/raw/main/ofl/notosansjp/NotoSansJP-Regular.ttf"
+    font_path = "NotoSansJP-Regular.ttf"
+    
+    # フォントファイルがなければダウンロード
+    if not os.path.exists(font_path):
+        try:
+            response = requests.get(font_url)
+            with open(font_path, "wb") as f:
+                f.write(response.content)
+        except:
+            pass
+
+    # フォントをMatplotlibに登録
+    if os.path.exists(font_path):
+        fm.fontManager.addfont(font_path)
+        plt.rcParams['font.family'] = 'Noto Sans JP'
+    else:
+        # ダウンロード失敗時はOS標準フォントを試す
+        system = platform.system()
+        if system == 'Windows':
+            plt.rcParams['font.family'] = ['Meiryo', 'Yu Gothic', 'MS Gothic']
+        elif system == 'Darwin':
+            plt.rcParams['font.family'] = ['Hiragino Sans', 'AppleGothic']
+        else:
+            plt.rcParams['font.family'] = ['Noto Sans CJK JP', 'IPAexGothic', 'DejaVu Sans']
+
+# アプリ起動時に実行
+setup_japanese_font()
 
 # -------------------------------------------
 # 1. ページ設定 & デザインテーマ定義
@@ -29,6 +65,7 @@ WHITE = "#ffffff"
 # カスタムCSS
 st.markdown(f"""
 <style>
+    /* Google Fonts (Web表示用) */
     @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700;900&display=swap');
     
     html, body, [class*="css"] {{
@@ -173,7 +210,7 @@ st.markdown(f"""
         transform: scale(1.02);
     }}
     
-    /* エラーメッセージを目立たせる */
+    /* エラーアラート */
     .stAlert {{
         box-shadow: 0 4px 10px rgba(0,0,0,0.05);
         border-radius: 10px;
@@ -183,9 +220,8 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------
-# 2. ヘルパー関数
+# 2. ロジック初期化
 # -------------------------------------------
-
 @st.cache_resource
 def load_predictor():
     return FishingPredictor()
@@ -327,21 +363,16 @@ with st.expander("🔎 検索条件を設定する", expanded=True):
 if execute_btn:
     st.divider()
     
-    # ------------------------------------------
-    # 🚨 日程チェック (14日制限)
-    # ------------------------------------------
+    # 🚨 日程チェック
     today = datetime.date.today()
-    limit_days = 14 # APIの制限日数
+    limit_days = 14
     limit_date = today + datetime.timedelta(days=limit_days)
     
     is_date_error = False
-    
     if mode == "mode_date_fixed":
-        if target_date > limit_date:
-            is_date_error = True
+        if target_date > limit_date: is_date_error = True
     else:
-        if start_date > limit_date:
-            is_date_error = True
+        if start_date > limit_date: is_date_error = True
 
     if is_date_error:
         st.error(
@@ -349,12 +380,8 @@ if execute_btn:
             f"気象データAPIの制約により、現在 **{limit_date.strftime('%Y-%m-%d')}** までの日程しか予測できません。\n"
             "日付を範囲内に変更して再度お試しください。"
         )
-        st.stop() # ここで処理を停止
+        st.stop()
         
-    # ------------------------------------------
-    # 正常処理
-    # ------------------------------------------
-    
     # --- モード1: 日付から場所 ---
     if mode == "mode_date_fixed":
         if not selected_points:
@@ -461,6 +488,4 @@ if execute_btn:
 """, unsafe_allow_html=True)
             
             with st.expander("📋 データ一覧を表示"):
-
                 st.dataframe(df_period[['date', 'rank', 'total_cpue', 'weather', 'wind', 'temp']], use_container_width=True)
-
