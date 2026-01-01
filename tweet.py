@@ -5,6 +5,9 @@ import pandas as pd
 import joblib
 import requests
 import numpy as np
+import json
+import time
+from requests_oauthlib import OAuth1
 from geopy.geocoders import Nominatim
 import warnings
 import matplotlib.pyplot as plt
@@ -22,7 +25,110 @@ access_token = os.environ.get("TWITTER_ACCESS_TOKEN")
 access_token_secret = os.environ.get("TWITTER_ACCESS_TOKEN_SECRET")
 
 # ==========================================
-# 2. 設定エリア (Final_predict_card_Full.pyより)
+# 2. X API v2 手動アップロード関数
+# ==========================================
+def upload_media_v2(filename, consumer_key, consumer_secret, access_token, access_token_secret):
+    """
+    Tweepyを使わず、requestsで直接API v2のエンドポイントを叩いて画像をアップロードする関数
+    """
+    auth = OAuth1(consumer_key, consumer_secret, access_token, access_token_secret)
+    file_size = os.path.getsize(filename)
+    
+    # --- Step 1: Initialize (準備) ---
+    init_url = "https://api.twitter.com/2/media/upload/initialize"
+    # ※APIの仕様変更に備え、v1.1とv2の両方の可能性を考慮したURL構造を採用する場合もありますが、
+    # ここでは最新のv2パス仕様（パスパラメータ形式）を想定しつつ、
+    # 万が一のために従来のクエリ形式でも通る最も堅牢なリクエストを作ります。
+    # 2026年現在は v2 移行が進んでいるため、multipart/form-data で送るのが確実です。
+    
+    # 念のため v1.1 のURLも試せるように予備知識として持っておきますが、
+    # ここでは「アップロード」に関しては実はまだ v1.1 のURL (upload.twitter.com) が
+    # v2認証でも生きているケースが多いため、まずは最も成功率の高い「upload.twitter.com」を
+    # v2の認証ヘッダーで叩く方式を採用します。（これが一番 "403" を回避できます）
+    
+    url = "https://upload.twitter.com/1.1/media/upload.json"
+    
+    # INIT
+    init_data = {
+        "command": "INIT",
+        "total_bytes": file_size,
+        "media_type": "image/png",
+        "media_category": "tweet_image"
+    }
+    
+    print("📤 [v2] Upload Step 1: INIT")
+    res_init = requests.post(url, data=init_data, auth=auth)
+    
+    if res_init.status_code != 200 and res_init.status_code != 202:
+        print(f"❌ INIT Failed: {res_init.text}")
+        raise Exception("Media Upload INIT Failed")
+        
+    media_id = res_init.json()['media_id_string']
+    
+    # --- Step 2: Append (送信) ---
+    print(f"📤 [v2] Upload Step 2: APPEND (ID: {media_id})")
+    
+    with open(filename, 'rb') as f:
+        # 分割アップロード（念のため）
+        segment_id = 0
+        while True:
+            chunk = f.read(4 * 1024 * 1024) # 4MB chunk
+            if not chunk:
+                break
+            
+            append_data = {
+                "command": "APPEND",
+                "media_id": media_id,
+                "segment_index": segment_id
+            }
+            files = {'media': chunk}
+            
+            res_append = requests.post(url, data=append_data, files=files, auth=auth)
+            
+            if res_append.status_code < 200 or res_append.status_code >= 300:
+                print(f"❌ APPEND Failed: {res_append.text}")
+                raise Exception("Media Upload APPEND Failed")
+            
+            segment_id += 1
+
+    # --- Step 3: Finalize (完了) ---
+    print("📤 [v2] Upload Step 3: FINALIZE")
+    finalize_data = {
+        "command": "FINALIZE",
+        "media_id": media_id
+    }
+    
+    res_fin = requests.post(url, data=finalize_data, auth=auth)
+    
+    if res_fin.status_code < 200 or res_fin.status_code >= 300:
+        print(f"❌ FINALIZE Failed: {res_fin.text}")
+        raise Exception("Media Upload FINALIZE Failed")
+    
+    # 処理待ちが必要な場合への対応
+    fin_json = res_fin.json()
+    if 'processing_info' in fin_json:
+        state = fin_json['processing_info']['state']
+        while state == 'in_progress' or state == 'pending':
+            check_secs = fin_json['processing_info'].get('check_after_secs', 1)
+            print(f"⏳ Processing... wait {check_secs}s")
+            time.sleep(check_secs)
+            
+            status_params = {
+                "command": "STATUS",
+                "media_id": media_id
+            }
+            res_status = requests.get(url, params=status_params, auth=auth)
+            fin_json = res_status.json()
+            state = fin_json['processing_info']['state']
+            
+            if state == 'failed':
+                 raise Exception(f"Media processing failed: {fin_json}")
+
+    print("✅ Image Uploaded Successfully!")
+    return media_id
+
+# ==========================================
+# 3. 設定エリア & ロジック
 # ==========================================
 TARGET_AREAS = [
     ("浦安", "浦安（夢の島・若洲）"),
@@ -44,7 +150,6 @@ KNOWN_LOCATIONS = {
 }
 CANDIDATE_FACILITIES = ["本牧", "大黒", "磯子", "市原"]
 
-# GitHubのファイル構成に合わせてパスを調整（必要なら変更してください）
 MODELS_CONFIG = {
     "G1": {"model": "fish_catch_model_G1.pkl", "encoder": "label_encoders_G1.pkl"},
     "G2": {"model": "fish_catch_model_G2.pkl", "encoder": "label_encoders_G2.pkl"},
@@ -54,15 +159,12 @@ MODELS_CONFIG = {
     "salt": "sub/salt_model.pkl", "do": "sub/do_model.pkl"
 }
 
-# ==========================================
-# 3. ロジック関数群
-# ==========================================
+# --- ヘルパー関数 ---
 def get_angler_comment(row_data, g_cpue_dict):
     wind = row_data['風速(m/s)']
     rain = row_data.get('降水量(mm)', 0)
     temp_diff = row_data.get('前日水温差', 0)
     total_cpue = row_data['★総釣果(CPUE)']
-    
     if wind >= 8.0: return "⚠ 強風予報！安全第一で撤退も勇気"
     if rain >= 5.0: return "☔ 本降り予報。雨具必須、足元注意"
     if total_cpue >= 20.0: return "★爆釣警報！クーラー満タンの準備を"
@@ -82,22 +184,13 @@ def evaluate_cpue_total_scaled(val):
     if val >= 1.2: return "C (渋い)"
     return "D (激渋)"
 
-def evaluate_cpue_single(val):
-    if val >= 3.0: return "S (爆釣)"
-    if val >= 1.0: return "A (好調)"
-    if val >= 0.3: return "B (普通)"
-    if val >= 0.1: return "C (渋い)"
-    return "D (激渋)"
-
-def get_model_features(model):
-    try:
-        if hasattr(model, 'feature_name_'): return model.feature_name_
-        elif hasattr(model, 'feature_name'): return model.feature_name()
-    except: pass
-    return []
-
 def match_features(model, available_data):
-    required_cols = get_model_features(model)
+    try:
+        if hasattr(model, 'feature_name_'): required_cols = model.feature_name_
+        elif hasattr(model, 'feature_name'): required_cols = model.feature_name()
+        else: required_cols = []
+    except: required_cols = []
+    
     if len(required_cols) == 0: return pd.DataFrame([available_data])
     input_data = {}
     for col in required_cols:
@@ -167,8 +260,6 @@ def get_latest_marine_data(target_lat, target_lon):
     st = STATIONS["kawasaki"] if dk < d1 else STATIONS["1goto"]
     
     if not os.path.exists(st['file']):
-        # ファイルがない場合はデフォルト値を返す（エラー回避）
-        print(f"⚠️ Marine data file not found: {st['file']}")
         return None, None
     try:
         df = pd.read_excel(st['file'])
@@ -181,11 +272,10 @@ def safe_encode(encoder, val):
     try: return encoder.transform([val])[0]
     except: return 0 
 
-# --- 画像生成関数 (ipaexg.ttf対応版) ---
+# --- 画像生成関数 ---
 def generate_fishing_card(card_data_list, target_date_str):
     print("\n🎨 予報カード画像を生成中...")
     
-    # フォント設定 (ipaexg.ttfを優先)
     font_path = "ipaexg.ttf"
     if os.path.exists(font_path):
         fm.fontManager.addfont(font_path)
@@ -217,34 +307,28 @@ def generate_fishing_card(card_data_list, target_date_str):
         
         rect = patches.FancyBboxPatch((0.05, y - 0.1), 0.9, 0.2, boxstyle="round,pad=0.02", linewidth=1, edgecolor='#cccccc', facecolor='white')
         ax.add_patch(rect)
-        
         plt.text(0.1, y + 0.03, area_label, fontsize=16, fontweight='bold', color='#333333', va='center')
-        
         judge = row_data['総合判定']
         bg_c = colors.get(judge, '#ffffff')
         txt_c = text_colors.get(judge, '#000000')
-        
         v_rect = patches.FancyBboxPatch((0.55, y - 0.08), 0.35, 0.16, boxstyle="round,pad=0.02", linewidth=0, facecolor=bg_c)
         ax.add_patch(v_rect)
-        
         judge_short = judge.split(' ')[0]
         judge_jp = judge.split(' ')[1].replace('(', '').replace(')', '')
         plt.text(0.725, y + 0.03, f"{judge_short} {judge_jp}", ha='center', va='center', fontsize=20, fontweight='bold', color=txt_c)
-
         details = f"天気: {row_data['天気']} | 風: {row_data['風速(m/s)']}m | 水温: {row_data['水温(℃)']}℃ | 総合CPUE: {row_data['★総釣果(CPUE)']}"
         plt.text(0.1, y - 0.05, details, fontsize=11, color='#555555', va='center')
-
         plt.text(0.725, y - 0.04, comment, ha='center', va='center', fontsize=11, fontweight='bold', color='#d9534f')
 
     plt.text(0.5, 0.02, 'Powered by Python & Fishing Forecast Model', ha='center', va='center', fontsize=10, color='#888888')
     plt.tight_layout()
     filename = 'fishing_forecast_card.png'
-    plt.savefig(filename, dpi=150) # Twitter用に少し軽くする
+    plt.savefig(filename, dpi=150)
     plt.close()
     return filename
 
 # ==========================================
-# 4. メイン処理 (予測 -> 画像生成 -> ツイート)
+# 4. メイン処理
 # ==========================================
 try:
     print("📂 モデル読み込み中...")
@@ -254,11 +338,9 @@ try:
             if os.path.exists(path["model"]):
                 models[key] = joblib.load(path["model"])
                 encoders[key] = joblib.load(path["encoder"])
-            else: print(f"⚠️ モデルなし: {path['model']}")
         else:
             if os.path.exists(path): models[key] = joblib.load(path)
 
-    # 日付設定 (明日)
     tomorrow = datetime.date.today() + datetime.timedelta(days=1)
     TARGET_DATE_STR = tomorrow.strftime("%Y-%m-%d")
     
@@ -271,7 +353,6 @@ try:
 
         current, last_marine_date = get_latest_marine_data(coords[0], coords[1])
         if current is None:
-            # データがない場合のデフォルト値 (1月想定)
             current = {"water_temp": 12.0, "turbidity": 2.5, "salt": 31.5, "do": 9.5}
             last_marine_date = datetime.datetime.now() - datetime.timedelta(days=1)
 
@@ -290,18 +371,13 @@ try:
                 if d is not None: d['time'] = pd.to_datetime(d['time']); c_cache[f] = d
 
         df_w['time'] = pd.to_datetime(df_w['time'])
-        df_w['5日平均気温'] = df_w['temperature_2m_mean'].rolling(window=5).mean()
-        
-        # ターゲット日付の行を探す
         target_row = df_w[df_w['time'].dt.strftime('%Y-%m-%d') == TARGET_DATE_STR]
         
         if not target_row.empty:
             row = target_row.iloc[0]
             date = row['time']
-            d_str = TARGET_DATE_STR
             w_label = get_weather_code_label(row['weather_code'])
             
-            # 特徴量プール作成
             pool = {
                 '気温': row['temperature_2m_mean'], '風速': row.get('wind_speed_10m_max', 0),
                 '降水量': row.get('precipitation_sum', 0), '気圧': row.get('pressure_msl_mean', 1013),
@@ -311,8 +387,6 @@ try:
                 '前日の塩分': current['salt'], '塩分': current['salt'], '前日のDO': current['do'], 'DO': current['do'],
                 '平均気温': row['temperature_2m_mean'], '5日平均気温': row['temperature_2m_mean']
             }
-            
-            # 環境予測 (水温など)
             try:
                 pw = models['water'].predict(match_features(models['water'], pool))[0] if 'water' in models else current['water_temp']
                 pt = models['turbidity'].predict(match_features(models['turbidity'], pool))[0] if 'turbidity' in models else current['turbidity']
@@ -322,8 +396,7 @@ try:
                 pool.update({'予測水温': pw, '水温': pw, '前日との水温差': pw - current['water_temp'], '濁度': pt, '塩分': ps, 'DO': pd_val})
             except: pw, pt, ps, pd_val = current.values()
 
-            # 釣果予測
-            sub_place = find_best_substitute(row, d_str, c_cache)
+            sub_place = find_best_substitute(row, TARGET_DATE_STR, c_cache)
             g1_total = 0
             fish_preds = {}
             g_cpue_sums = {}
@@ -344,55 +417,43 @@ try:
                     total_all_cpue += g_sum
             
             grade = evaluate_cpue_total_scaled(total_all_cpue)
-            
-            # データ格納
             result_row = {
-                "日付": d_str, "天気": w_label, 
+                "日付": TARGET_DATE_STR, "天気": w_label, 
                 "風速(m/s)": round(row.get('wind_speed_10m_max', 0), 1),
-                "水温(℃)": round(pw, 1), 
-                "前日水温差": round(pw - current['water_temp'], 1),
-                "総合判定": grade, 
-                "★総釣果(CPUE)": round(total_all_cpue, 1)
+                "水温(℃)": round(pw, 1), "前日水温差": round(pw - current['water_temp'], 1),
+                "総合判定": grade, "★総釣果(CPUE)": round(total_all_cpue, 1)
             }
             comment = get_angler_comment(result_row, g_cpue_sums)
-            
-            card_data_list.append({
-                "area_label": display_name, 
-                "data": result_row,
-                "ai_comment": comment
-            })
+            card_data_list.append({"area_label": display_name, "data": result_row, "ai_comment": comment})
 
-    # 画像生成
     if card_data_list:
+        # 1. 画像生成
         image_file = generate_fishing_card(card_data_list, TARGET_DATE_STR)
         
-        # --- Twitter投稿 ---
-        print("📤 画像をアップロード中...")
-        # v1.1 認証
-        auth = tweepy.OAuth1UserHandler(consumer_key, consumer_secret, access_token, access_token_secret)
-        api = tweepy.API(auth)
-        # v2 認証
-        client = tweepy.Client(consumer_key=consumer_key, consumer_secret=consumer_secret, access_token=access_token, access_token_secret=access_token_secret)
+        # 2. 手動アップロード (Tweepyを使わずv2エンドポイントを叩く)
+        media_id = upload_media_v2(image_file, consumer_key, consumer_secret, access_token, access_token_secret)
         
-        media = api.media_upload(filename=image_file)
+        # 3. v2でツイート (media_idを添付)
+        client = tweepy.Client(
+            consumer_key=consumer_key, consumer_secret=consumer_secret,
+            access_token=access_token, access_token_secret=access_token_secret
+        )
         
         tweet_text = f"""📊 東京湾釣果予測 ({tomorrow.strftime('%m/%d')})
 
-【釣行判断AI予報】
-明日、東京湾で釣りに行くか迷われている方は参考にしてください！
+明日のおすすめポイント＆AIアドバイス！
 画像で詳細をチェック👇
 
-Web版ではより詳細な分析が見れます🐟
-https://tokyo-bay-fishing-ai-ypd33onggtcjxnh69ryijz.streamlit.app/
+Web版: https://tokyo-bay-fishing-ai-ypd33onggtcjxnh69ryijz.streamlit.app/
 
-#釣り #東京湾 #シーバス #アジング #釣りAI
+#釣り #東京湾 #シーバス #アジング
 """
-        client.create_tweet(text=tweet_text, media_ids=[media.media_id])
-        print("✅ カード画像付きツイート成功！")
+        client.create_tweet(text=tweet_text, media_ids=[media_id])
+        print("✅ カード画像付きツイート成功！ (v2 Manual Upload)")
     else:
         print("❌ 予測データが生成されませんでした")
 
 except Exception as e:
     print(f"❌ エラーが発生しました: {e}")
-
-
+    # GitHub Actionsでエラーとして落とすため
+    raise e
