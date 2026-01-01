@@ -378,6 +378,7 @@ try:
         
         tweet_text = f"""📊 東京湾釣果予測 ({tomorrow.strftime('%m/%d')})
 
+【釣行判断AI予報】
 明日、東京湾で釣りに行くか迷われている方は参考にしてください！
 画像で詳細をチェック👇
 
@@ -393,4 +394,5 @@ https://tokyo-bay-fishing-ai-ypd33onggtcjxnh69ryijz.streamlit.app/
 
 except Exception as e:
     print(f"❌ エラーが発生しました: {e}")
+
 
