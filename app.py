@@ -319,7 +319,8 @@ with tab_date:
             target_date = st.date_input(
                 "日程",
                 datetime.date.today() + datetime.timedelta(days=1),
-                help="予測したい日付を選択してください"
+                help="予測したい日付を選択してください",
+                key="date_input_tab1"
             )
         with col2:
             points_list = ["浦安", "若洲", "市原", "東扇島", "大黒", "磯子"]
@@ -327,7 +328,8 @@ with tab_date:
                 "候補エリア",
                 points_list,
                 default=points_list,
-                placeholder="エリアを選択..."
+                placeholder="エリアを選択...",
+                key="points_input_tab1"
             )
         with col3:
             if st.button("検索する", key="btn_date_search"):
@@ -342,16 +344,17 @@ with tab_place:
         
         with col1:
             points_list = ["浦安", "若洲", "市原", "東扇島", "大黒", "磯子"]
-            target_place = st.selectbox("場所", points_list)
+            target_place = st.selectbox("場所", points_list, key="place_input_tab2")
             
         with col2:
             start_date = st.date_input(
                 "開始日",
-                datetime.date.today() + datetime.timedelta(days=1)
+                datetime.date.today() + datetime.timedelta(days=1),
+                key="date_input_tab2"
             )
             
         with col3:
-            period = st.slider("期間 (向こう何日間)", 3, 14, 7)
+            period = st.slider("期間 (向こう何日間)", 3, 14, 7, key="period_input_tab2")
 
         with col4:
             if st.button("ベスト日程を探す", key="btn_place_search"):
@@ -405,37 +408,38 @@ if execute_btn:
                     
                     for i, row in df_res.iterrows():
                         r_color = {'S':'#FF385C', 'A':'#FF9F1C', 'B':'#FFD93D', 'C':'#6FCF97', 'D':'#AAB7B8'}.get(row['rank'], '#999')
-                        fish_html = get_top_fish_html(row.get('fish_breakdown', {}))
+                        fish_html_content = get_top_fish_html(row.get('fish_breakdown', {}))
                         
-                        st.markdown(f"""
-<div class="result-card">
-    <div style="display:flex; justify-content:space-between; align-items:center;">
-        <div style="display:flex; align-items:center;">
-            <span style="font-size:1.2rem; font-weight:bold;">{row['name']}</span>
-            <span class="rank-badge" style="background-color:{r_color};">{row['rank']}</span>
-        </div>
-        <div style="font-size:1.5rem; font-weight:900; color:{r_color};">{row['total_cpue']:.1f}</div>
-    </div>
-    <div class="weather-box">
-        <div class="weather-item">
-            <span class="weather-label">天気</span>
-            <span class="weather-val">{row['weather']}</span>
-        </div>
-        <div class="weather-item">
-            <span class="weather-label">風速</span>
-            <span class="weather-val">{row['wind']:.1f}m</span>
-        </div>
-        <div class="weather-item">
-            <span class="weather-label">気温</span>
-            <span class="weather-val">{row['temp']:.1f}℃</span>
-        </div>
-    </div>
-    {{fish_html}}
-</div>
-""", unsafe_allow_html=True)
+                        card_html = f"""
+                        <div class="result-card">
+                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                <div style="display:flex; align-items:center;">
+                                    <span style="font-size:1.2rem; font-weight:bold;">{row['name']}</span>
+                                    <span class="rank-badge" style="background-color:{r_color};">{row['rank']}</span>
+                                </div>
+                                <div style="font-size:1.5rem; font-weight:900; color:{r_color};">{row['total_cpue']:.1f}</div>
+                            </div>
+                            <div class="weather-box">
+                                <div class="weather-item">
+                                    <span class="weather-label">天気</span>
+                                    <span class="weather-val">{row['weather']}</span>
+                                </div>
+                                <div class="weather-item">
+                                    <span class="weather-label">風速</span>
+                                    <span class="weather-val">{row['wind']:.1f}m</span>
+                                </div>
+                                <div class="weather-item">
+                                    <span class="weather-label">気温</span>
+                                    <span class="weather-val">{row['temp']:.1f}℃</span>
+                                </div>
+                            </div>
+                            {fish_html_content}
+                        </div>
+                        """
+                        st.markdown(card_html, unsafe_allow_html=True)
 
     elif mode == "mode_place_fixed":
-        with st.spinner(f'{{target_place}} の向こう {{period}} 日間を解析中...'):
+        with st.spinner(f'{target_place} の向こう {period} 日間を解析中...'):
             period_results = predictor.run_period_analysis(
                 target_place, 
                 start_date.strftime("%Y-%m-%d"), 
@@ -447,7 +451,7 @@ if execute_btn:
             df_period['date_dt'] = pd.to_datetime(df_period['date'])
             df_period = df_period.sort_values('date_dt')
             
-            st.markdown(f"### 📈 {{target_place}} の釣果予測推移")
+            st.markdown(f"### 📈 {target_place} の釣果予測推移")
             fig_chart = plot_trend_chart(df_period)
             st.pyplot(fig_chart)
             
@@ -457,33 +461,35 @@ if execute_btn:
             cols = st.columns(3)
             for i, (idx, row) in enumerate(best_days.iterrows()):
                 r_color = {'S':'#FF385C', 'A':'#FF9F1C', 'B':'#FFD93D', 'C':'#6FCF97', 'D':'#AAB7B8'}.get(row['rank'], '#999')
-                fish_html = get_top_fish_html(row.get('fish_breakdown', {}))
+                fish_html_content = get_top_fish_html(row.get('fish_breakdown', {}))
+                display_date = row['date'][5:].replace('-', '/')
 
                 with cols[i]:
-                    st.markdown(f"""
-<div class="result-card" style="text-align:center;">
-    <div style="font-size:1.3rem; font-weight:800; color:#333; margin-bottom:5px;">
-        {{row['date'][5:].replace('-','/')}}
-    </div>
-    <div style="font-size:2.5rem; font-weight:900; color:{{r_color}}; line-height:1;">
-        {{row['total_cpue']:.1f}}
-    </div>
-    <div style="margin: 10px 0;">
-        <span class="rank-badge" style="background-color:{{r_color}}; margin:0;">{{row['rank']}}</span>
-    </div>
-    <div class="weather-box">
-        <div class="weather-item">
-            <span class="weather-label">天気</span>
-            <span class="weather-val">{{row['weather']}}</span>
-        </div>
-        <div class="weather-item">
-            <span class="weather-label">風速</span>
-            <span class="weather-val">{{row['wind']:.1f}}m</span>
-        </div>
-    </div>
-    {{fish_html}}
-</div>
-""", unsafe_allow_html=True)
+                    day_card_html = f"""
+                    <div class="result-card" style="text-align:center;">
+                        <div style="font-size:1.3rem; font-weight:800; color:#333; margin-bottom:5px;">
+                            {display_date}
+                        </div>
+                        <div style="font-size:2.5rem; font-weight:900; color:{r_color}; line-height:1;">
+                            {row['total_cpue']:.1f}
+                        </div>
+                        <div style="margin: 10px 0;">
+                            <span class="rank-badge" style="background-color:{r_color}; margin:0;">{row['rank']}</span>
+                        </div>
+                        <div class="weather-box">
+                            <div class="weather-item">
+                                <span class="weather-label">天気</span>
+                                <span class="weather-val">{row['weather']}</span>
+                            </div>
+                            <div class="weather-item">
+                                <span class="weather-label">風速</span>
+                                <span class="weather-val">{row['wind']:.1f}m</span>
+                            </div>
+                        </div>
+                        {fish_html_content}
+                    </div>
+                    """
+                    st.markdown(day_card_html, unsafe_allow_html=True)
             
             with st.expander("📋 データ一覧を表示"):
                 st.dataframe(df_period[['date', 'rank', 'total_cpue', 'weather', 'wind', 'temp']], use_container_width=True)
