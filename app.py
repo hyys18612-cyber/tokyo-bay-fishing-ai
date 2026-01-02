@@ -262,7 +262,9 @@ def plot_map(data, date_str):
         ax.scatter(x+0.003, y-0.003, s=size, c='black', alpha=0.1, zorder=9, edgecolors='none')
         ax.scatter(x, y, s=size, c=color, alpha=0.9, edgecolors='white', linewidth=2.5, zorder=10)
         
-        label_txt = f"{item['name']}\n{cpue:.1f}"
+        # --- 変更点: 数値の後に「匹」を追加 ---
+        label_txt = f"{item['name']}\n{cpue:.1f}匹"
+        
         ax.text(x, y-0.015, label_txt, fontsize=12, fontweight='bold', ha='center', va='top', 
                  color='white', path_effects=[pe.withStroke(linewidth=3, foreground="#484848")], zorder=11)
     return fig
@@ -274,7 +276,7 @@ def plot_trend_chart(df, threshold=10.0):
     ax.grid(True, linestyle=':', color='#ccc', alpha=0.7)
     
     ax.plot(df['date_dt'], df['total_cpue'], marker='o', markersize=8, 
-            linestyle='-', linewidth=3, color=PRIMARY_BLUE, label='CPUE')
+            linestyle='-', linewidth=3, color=PRIMARY_BLUE, label='CPUE (匹/人)')
     
     ax.axhline(y=threshold, color='#FF385C', linestyle='--', linewidth=1.5, alpha=0.8, label='Aランク')
     
@@ -385,6 +387,14 @@ if execute_btn:
             "日付を範囲内に変更して再度お試しください。"
         )
         st.stop()
+
+    # --- 用語解説 ---
+    with st.expander("ℹ️ 数値の見方について（CPUEとは？）"):
+        st.markdown("""
+        表示されている数値は **CPUE (Catch Per Unit Effort)** です。
+        これは **「釣り人1人あたりが1日に釣れる予想匹数」** を表しています。
+        *例: 5.6匹/人 → 1人あたり約5〜6匹の釣果が見込まれます。*
+        """)
         
     if mode == "mode_date_fixed":
         if not selected_points:
@@ -410,6 +420,7 @@ if execute_btn:
                         r_color = {'S':'#FF385C', 'A':'#FF9F1C', 'B':'#FFD93D', 'C':'#6FCF97', 'D':'#AAB7B8'}.get(row['rank'], '#999')
                         fish_html_content = get_top_fish_html(row.get('fish_breakdown', {}))
                         
+                        # --- 変更点: 数値のラベルと単位を追加 ---
                         card_html = f"""
                         <div class="result-card">
                             <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -417,7 +428,11 @@ if execute_btn:
                                     <span style="font-size:1.2rem; font-weight:bold;">{row['name']}</span>
                                     <span class="rank-badge" style="background-color:{r_color};">{row['rank']}</span>
                                 </div>
-                                <div style="font-size:1.5rem; font-weight:900; color:{r_color};">{row['total_cpue']:.1f}</div>
+                                <div style="text-align:right;">
+                                    <div style="font-size:0.75rem; color:#888; margin-bottom:-5px;">予想釣果(CPUE)</div>
+                                    <span style="font-size:1.8rem; font-weight:900; color:{r_color};">{row['total_cpue']:.1f}</span>
+                                    <span style="font-size:1.0rem; font-weight:bold; color:#666;">匹/人</span>
+                                </div>
                             </div>
                             <div class="weather-box">
                                 <div class="weather-item">
@@ -465,13 +480,19 @@ if execute_btn:
                 display_date = row['date'][5:].replace('-', '/')
 
                 with cols[i]:
+                    # --- 変更点: 数値のラベルと単位を追加 ---
                     day_card_html = f"""
                     <div class="result-card" style="text-align:center;">
                         <div style="font-size:1.3rem; font-weight:800; color:#333; margin-bottom:5px;">
                             {display_date}
                         </div>
-                        <div style="font-size:2.5rem; font-weight:900; color:{r_color}; line-height:1;">
-                            {row['total_cpue']:.1f}
+                        <div style="margin-bottom:5px;">
+                            <span style="font-size:0.8rem; color:#888;">予想釣果</span>
+                            <br>
+                            <span style="font-size:2.5rem; font-weight:900; color:{r_color}; line-height:1;">
+                                {row['total_cpue']:.1f}
+                            </span>
+                            <span style="font-size:1rem; color:#666; font-weight:bold;">匹/人</span>
                         </div>
                         <div style="margin: 10px 0;">
                             <span class="rank-badge" style="background-color:{r_color}; margin:0;">{row['rank']}</span>
