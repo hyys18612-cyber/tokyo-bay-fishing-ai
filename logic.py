@@ -66,6 +66,7 @@ class FishingPredictor:
                 if os.path.exists(path):
                     self.models[key] = joblib.load(path)
 
+    # 判定基準をカード側に統一
     def evaluate_cpue_total_scaled(self, val):
         if val >= 20.0: return "S"
         if val >= 10.0: return "A"
@@ -111,14 +112,8 @@ class FishingPredictor:
         try: return encoder.transform([val])[0]
         except: return 0 
 
-    # ---------------------------------------------------------
-    # ⚡ 高速化ポイント1: キャッシュ付きのAPIリクエスト関数
-    # ---------------------------------------------------------
     @lru_cache(maxsize=128)
     def _fetch_weather_api(self, lat, lon, start_date_str, end_date_str):
-        """
-        引数が同じならキャッシュされた結果を返す内部関数
-        """
         url = "https://api.open-meteo.com/v1/forecast"
         params = {
             "latitude": lat, "longitude": lon, 
@@ -140,7 +135,6 @@ class FishingPredictor:
 
     def fetch_weather_forecast_range(self, lat, lon, start_dt, end_dt):
         fetch_start = start_dt - datetime.timedelta(days=5)
-        # 文字列に変換してキャッシュ可能な状態にする
         return self._fetch_weather_api(
             lat, lon, 
             fetch_start.strftime("%Y-%m-%d"), 
@@ -163,9 +157,11 @@ class FishingPredictor:
         return best_facility
 
     def get_latest_marine_data(self, target_lat, target_lon):
-        d_k = abs(target_lat - STATIONS["kawasaki"]["lat"]) + abs(target_lon - STATIONS["kawasaki"]["lon"])
-        d_1 = abs(target_lat - STATIONS["1goto"]["lat"]) + abs(target_lon - STATIONS["1goto"]["lon"])
-        st = STATIONS["kawasaki"] if d_k < d_1 else STATIONS["1goto"]
+        # 距離計算をカード側のロジックに変更
+        def calc_dist(lat1, lon1, lat2, lon2): return np.sqrt((lat1 - lat2)**2 + (lon1 - lon2)**2)
+        dk = calc_dist(target_lat, target_lon, STATIONS["kawasaki"]["lat"], STATIONS["kawasaki"]["lon"])
+        d1 = calc_dist(target_lat, target_lon, STATIONS["1goto"]["lat"], STATIONS["1goto"]["lon"])
+        st = STATIONS["kawasaki"] if dk < d1 else STATIONS["1goto"]
         
         if not os.path.exists(st['file']):
             return None, None
@@ -176,16 +172,9 @@ class FishingPredictor:
             return vals, pd.to_datetime(lr.iloc[0])
         except: return None, None
 
-    # ---------------------------------------------------------
-    # ⚡ 高速化ポイント2: まとめてデータ取得
-    # ---------------------------------------------------------
     def prepare_weather_data_parallel(self, points, start_dt, end_dt):
-        """
-        必要な全地点（対象地点＋候補施設）の天気を並列取得する
-        """
         unique_locs = set(points) | set(CANDIDATE_FACILITIES)
         weather_cache = {}
-        
         with ThreadPoolExecutor(max_workers=10) as executor:
             future_to_loc = {}
             for loc_name in unique_locs:
@@ -195,7 +184,6 @@ class FishingPredictor:
                         self.fetch_weather_forecast_range, 
                         coords[0], coords[1], start_dt, end_dt
                     )] = loc_name
-            
             for future in as_completed(future_to_loc):
                 loc_name = future_to_loc[future]
                 try:
@@ -203,7 +191,6 @@ class FishingPredictor:
                     if data is not None:
                         weather_cache[loc_name] = data
                 except: pass
-                
         return weather_cache
 
     # ==========================================
@@ -213,24 +200,24 @@ class FishingPredictor:
         analysis_data = []
         target_dt = pd.to_datetime(target_date_str)
         
-        # 海況データ基準で開始日を決める（ここは仮で1地点見て決める）
-        ref_coords = self.get_coordinates("川崎") # 基準点
+        # 基準日決定ロジックをカード側と完全に一致させる
+        ref_coords = self.get_coordinates("川崎") 
         _, last_marine_date = self.get_latest_marine_data(ref_coords[0], ref_coords[1])
         if last_marine_date is None: 
             last_marine_date = datetime.datetime.now() - datetime.timedelta(days=1)
         
+        # シミュレーション開始日は観測の翌日
         sim_start_dt = last_marine_date + datetime.timedelta(days=1)
+        # ターゲット日が過去すぎる場合のセーフティ
         if target_dt < sim_start_dt:
-            sim_start_dt = target_dt - datetime.timedelta(days=3)
+            sim_start_dt = target_dt - datetime.timedelta(days=5)
 
-        # ⚡ 必要な全データを並列で一括取得
         global_weather_cache = self.prepare_weather_data_parallel(target_points, sim_start_dt, target_dt)
         
         for place_name in target_points:
             coords = self.get_coordinates(place_name)
             if not coords: continue
 
-            # 海洋データ (ファイル読み込みは高速なのでそのままでOK)
             current, _ = self.get_latest_marine_data(coords[0], coords[1])
             if current is None:
                 current = {"water_temp": 12.0, "turbidity": 2.5, "salt": 31.5, "do": 9.5}
@@ -238,11 +225,10 @@ class FishingPredictor:
             df_w = global_weather_cache.get(place_name)
             if df_w is None: continue
             
-            # この地点計算用の候補施設キャッシュ
             c_cache = {k: v for k, v in global_weather_cache.items() if k in CANDIDATE_FACILITIES}
 
-            # 予測ループ（ここは計算のみなので純粋なPython処理）
             final_result = None
+            # カード側と同じ「積み上げシミュレーション」
             for i, row in df_w.iterrows():
                 date = row['time']
                 d_str = date.strftime('%Y-%m-%d')
@@ -265,27 +251,47 @@ class FishingPredictor:
                     ps = m['salt'].predict(self.match_features(m['salt'], pool))[0] if 'salt' in m else current['salt']
                     pd_val = m['do'].predict(self.match_features(m['do'], pool))[0] if 'do' in m else current['do']
                     pt = max(0.1, pt)
-                    pool.update({'予測水温': pw, '水温': pw, '濁度': pt, '塩分': ps, 'DO': pd_val})
+                    # カード側で追加された特徴量を反映
+                    pool.update({'予測水温': pw, '水温': pw, '前日との水温差': pw - current['water_temp'], '濁度': pt, '塩分': ps, 'DO': pd_val})
                 except: pw, pt, ps, pd_val = current.values()
 
                 if d_str == target_date_str:
                     sub_place = self.find_best_substitute(row, d_str, c_cache)
-                    g1_total = 0
                     fish_breakdown = {}
                     fish_group_map = {}
                     total_cpue = 0
                     
-                    for g_name in ["G1", "G2", "G3", "G4"]:
+                    # Group1の合計値を特徴量として持たせる
+                    g1_sum = 0
+                    if "G1" in self.models:
+                        m, e = self.models["G1"], self.encoders["G1"]
+                        pool['施設名'] = self.safe_encode(e['施設名'], sub_place)
+                        pool['天気'] = self.safe_encode(e['天気'], w_label)
+                        for fish in e['魚種'].classes_:
+                            pool['魚種'] = self.safe_encode(e['魚種'], fish)
+                            pred = max(0, m.predict(self.match_features(m, pool))[0])
+                            fish_breakdown[fish] = pred
+                            fish_group_map[fish] = self.configs["G1"]["color"]
+                            g1_sum += pred
+                    
+                    pool['G1CPUE'] = g1_sum
+                    pool['Group1_Total_CPUE'] = g1_sum
+                    total_cpue = g1_sum
+                    
+                    # G2-G4計算
+                    for g_name in ["G2", "G3", "G4"]:
                         if g_name in self.models:
                             m, e = self.models[g_name], self.encoders[g_name]
                             pool['施設名'] = self.safe_encode(e['施設名'], sub_place)
                             pool['天気'] = self.safe_encode(e['天気'], w_label)
+                            g_group_sum = 0
                             for fish in e['魚種'].classes_:
                                 pool['魚種'] = self.safe_encode(e['魚種'], fish)
                                 pred = max(0, m.predict(self.match_features(m, pool))[0])
                                 fish_breakdown[fish] = pred
                                 fish_group_map[fish] = self.configs[g_name]["color"]
-                                total_cpue += pred
+                                g_group_sum += pred
+                            total_cpue += g_group_sum
                     
                     final_result = {
                         "name": place_name, "lat": coords[0], "lon": coords[1],
@@ -295,34 +301,21 @@ class FishingPredictor:
                         "weather": w_label, "temp": pw, "wind": row.get('wind_speed_10m_max', 0),
                         "rank": self.evaluate_cpue_total_scaled(total_cpue)
                     }
+                # 環境数値を更新して次の日へ
                 current = {"water_temp": pw, "turbidity": pt, "salt": ps, "do": pd_val}
             
             if final_result: analysis_data.append(final_result)
             
         return analysis_data
 
-    # ==========================================
-    # 🆕 モード2: 特定の場所で、期間中のベストを探す
-    # ==========================================
     def run_period_analysis(self, place_name, start_date_str, days=7):
         results = []
         start_dt = pd.to_datetime(start_date_str)
         end_dt = start_dt + datetime.timedelta(days=days)
-
-        # ⚡ 期間全体・対象地点・候補施設の全データを一括取得
-        # run_prediction内部でも再度キャッシュ参照するので高速
-        # ここでは「期間分を一気に」取得させるために先に呼んでおく
         
-        # NOTE: run_predictionは1日ずつ指定する仕様なので、
-        # ここでは効率化のために1日ずつ呼ぶループは変えませんが、
-        # _fetch_weather_api がLRUキャッシュを持っているので、
-        # 最初の1回で期間分のデータが取れていれば、2回目以降のループは爆速になります。
-        
-        # 参照用の基準日などを設定
         ref_coords = self.get_coordinates(place_name)
         if not ref_coords: return []
         
-        # キャッシュを温める（期間全体のデータを一度リクエスト）
         self.fetch_weather_forecast_range(ref_coords[0], ref_coords[1], start_dt, end_dt)
         for cand in CANDIDATE_FACILITIES:
             cc = self.get_coordinates(cand)
@@ -331,13 +324,9 @@ class FishingPredictor:
         for i in range(days):
             target_dt = start_dt + datetime.timedelta(days=i)
             d_str = target_dt.strftime('%Y-%m-%d')
-            
-            # キャッシュが効くので高速
             data = self.run_prediction(d_str, [place_name])
-            
             if data:
                 res = data[0]
                 res['date'] = d_str
                 results.append(res)
-        
         return results
