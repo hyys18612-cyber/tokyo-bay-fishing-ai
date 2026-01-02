@@ -7,18 +7,36 @@ from matplotlib import font_manager as fm
 import datetime
 import platform
 import os
-import streamlit.components.v1 as components  # Google Analytics用
+import shutil
+import base64
+import streamlit.components.v1 as components
 
 # ロジックファイルからクラスをインポート
 from logic import FishingPredictor, MAP_EXTENT, VISUAL_OFFSETS
 
 # -------------------------------------------
+# 画像ファイルの準備 & Base64変換
+# -------------------------------------------
+def get_img_as_base64(filename):
+    """画像をBase64文字列に変換する"""
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(current_dir, filename)
+    
+    if os.path.exists(file_path):
+        with open(file_path, "rb") as f:
+            data = f.read()
+        return base64.b64encode(data).decode()
+    return None
+
+# 画像ファイル名 (PNG形式)
+target_image_name = "sea_view.png"
+img_b64 = get_img_as_base64(target_image_name)
+
+# -------------------------------------------
 # 0. Google Analytics 設定
 # -------------------------------------------
 def inject_ga():
-    # 提供された測定ID
     GA_ID = "G-3L2NXKM7YT"
-    
     ga_code = f"""
     <script async src="https://www.googletagmanager.com/gtag/js?id={GA_ID}"></script>
     <script>
@@ -28,38 +46,32 @@ def inject_ga():
         gtag('config', '{GA_ID}');
     </script>
     """
-    # HTMLとして埋め込む（高さ0で見えないようにする）
     components.html(ga_code, height=0)
 
 # -------------------------------------------
-# 1. 日本語フォント設定 (完全オフライン対応版)
+# 1. 日本語フォント設定
 # -------------------------------------------
 def setup_japanese_font():
-    # GitHubにアップロードしたフォントファイルを指定
-    font_path = "ipaexg.ttf"
-
-    # ファイルが存在するかチェックして登録
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    font_path = os.path.join(current_dir, "ipaexg.ttf")
+    
     if os.path.exists(font_path):
         try:
-            # フォントマネージャーに追加
             fm.fontManager.addfont(font_path)
-            # 追加したフォントをMatplotlibのデフォルトに設定
             plt.rcParams['font.family'] = 'IPAexGothic'
         except Exception as e:
-            st.error(f"フォントの読み込みエラー: {e}")
+            st.error(f"フォントエラー: {e}")
     else:
-        # 万が一ファイルがない場合のフォールバック（Windows/Mac用）
         system = platform.system()
         if system == 'Windows':
             plt.rcParams['font.family'] = ['Meiryo', 'Yu Gothic']
         elif system == 'Darwin':
             plt.rcParams['font.family'] = ['Hiragino Sans', 'AppleGothic']
 
-# アプリ起動時に実行
 setup_japanese_font()
 
 # -------------------------------------------
-# 2. ページ設定 & デザインテーマ定義
+# 2. ページ設定
 # -------------------------------------------
 st.set_page_config(
     page_title="東京湾釣り予報AI",
@@ -68,168 +80,136 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# ▼ Google Analyticsを注入
 inject_ga()
 
-# カラーパレット定義
-PRIMARY = "#0e4d92"    # 濃い青
-SECONDARY = "#f0f2f6"  # 薄いグレー背景
-ACCENT = "#ff6b6b"     # アクセント（赤系）
-WHITE = "#ffffff"
+# カラー定義
+PRIMARY_BLUE = "#0e4d92"
+LIGHT_BLUE = "#2980b9"
+BG_COLOR = "#F7F7F7"
+CARD_BG = "#FFFFFF"
 
-# カスタムCSS
+# CSSスタイルの作成
+if img_b64:
+    hero_style = f"""
+        background: linear-gradient(rgba(0, 0, 0, 0.35), rgba(0, 0, 0, 0.35)), 
+                    url("data:image/png;base64,{img_b64}");
+        background-size: cover;
+        background-position: top;
+    """
+else:
+    hero_style = f"background: linear-gradient(135deg, {PRIMARY_BLUE}, {LIGHT_BLUE});"
+
 st.markdown(f"""
 <style>
-    /* Google Fonts (Web表示用) */
     @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700;900&display=swap');
     
     html, body, [class*="css"] {{
         font-family: 'Noto Sans JP', sans-serif;
-        background-color: {SECONDARY};
-        color: #333;
+        background-color: {BG_COLOR};
+        color: #222;
     }}
     
     section[data-testid="stSidebar"] {{ display: none; }}
+    .block-container {{ padding-top: 1rem; }}
 
-    /* タイトルエリア */
+    /* --- ヒーローヘッダー --- */
     .hero-container {{
+        width: 100%;
+        height: 350px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
         text-align: center;
-        padding: 2rem 0 1rem 0;
+        color: white;
+        border-radius: 16px;
+        margin-bottom: 35px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        {hero_style}
     }}
+
+    @media (max-width: 768px) {{
+        .hero-container {{ height: 220px; }}
+        .main-title {{ font-size: 2.2rem !important; }}
+    }}
+
     .main-title {{
-        font-size: 2.2rem;
+        font-size: 3.5rem;
         font-weight: 900;
-        color: {PRIMARY};
-        margin: 0;
+        color: white;
+        margin-bottom: 0.2rem;
+        text-shadow: 0 3px 15px rgba(0,0,0,0.8);
         letter-spacing: 0.05em;
     }}
     .sub-title {{
-        font-size: 1.0rem;
-        color: #666;
-        margin-top: 0.5rem;
-    }}
-
-    /* コントロールパネル */
-    .control-panel {{
-        background-color: {WHITE};
-        padding: 20px 25px;
-        border-radius: 16px;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.06);
-        margin-bottom: 30px;
-        border: 1px solid #eef0f3;
-    }}
-    
-    .streamlit-expanderHeader {{
+        font-size: 1.2rem;
+        color: #f0f0f0;
         font-weight: 700;
-        color: {PRIMARY};
-        background-color: {WHITE};
-        border-radius: 8px;
+        text-shadow: 0 2px 8px rgba(0,0,0,0.7);
     }}
 
-    /* 結果カード */
-    .result-card {{
-        background-color: {WHITE};
-        padding: 18px;
-        border-radius: 12px;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.03);
-        margin-bottom: 15px;
-        border-left: 5px solid #ddd;
-        transition: transform 0.2s ease;
+    /* --- UIコンポーネント --- */
+    .stTabs [data-baseweb="tab-list"] {{
+        gap: 20px; justify-content: center; margin-bottom: 30px; border-bottom: none !important;
     }}
-    .result-card:hover {{
-        transform: translateY(-2px);
-        box-shadow: 0 5px 15px rgba(0,0,0,0.08);
+    .stTabs [data-baseweb="tab"] {{
+        height: 50px; background-color: transparent; border-radius: 30px;
+        color: #717171; font-weight: 700; font-size: 1rem; padding: 0 25px; border: none !important;
     }}
-
-    .rank-S {{ border-left-color: #e74c3c !important; }}
-    .rank-A {{ border-left-color: #e67e22 !important; }}
-    .rank-B {{ border-left-color: #f1c40f !important; }}
-    .rank-C {{ border-left-color: #2ecc71 !important; }}
-
-    .rank-badge {{
-        display: inline-block;
-        padding: 3px 10px;
-        border-radius: 20px;
-        color: white;
-        font-weight: bold;
-        font-size: 0.8rem;
-        margin-left: 8px;
-        vertical-align: middle;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    .stTabs [aria-selected="true"] {{
+        background-color: #E8F0FE !important; color: {PRIMARY_BLUE} !important;
     }}
-    
-    /* 魚タグ */
-    .fish-tag {{
-        display: inline-flex;
-        align-items: center;
-        background-color: #e3f2fd;
-        color: #1565c0;
-        padding: 2px 8px;
-        border-radius: 6px;
-        font-size: 0.75rem;
-        font-weight: 600;
-        margin-right: 5px;
-        margin-top: 5px;
-    }}
-    .fish-score {{
-        background-color: #fff;
-        color: #1565c0;
-        padding: 0 5px;
-        border-radius: 4px;
-        font-size: 0.7rem;
-        margin-left: 5px;
+    div[data-baseweb="tab-highlight"] {{
+        background-color: {PRIMARY_BLUE} !important;
     }}
 
-    /* 気象情報ボックス */
-    .weather-box {{
-        margin-top: 10px;
-        background-color: #f8f9fa;
-        border-radius: 8px;
-        padding: 8px;
-        font-size: 0.85rem;
-        color: #555;
-        display: flex;
-        justify-content: space-around;
-        align-items: center;
-    }}
-    .weather-item {{
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        line-height: 1.2;
-    }}
-    .weather-label {{
-        font-size: 0.7rem;
-        color: #888;
-        margin-bottom: 2px;
-    }}
-    .weather-val {{
-        font-weight: bold;
-        color: #333;
+    span[data-baseweb="tag"] {{
+        background-color: #E8F0FE !important;
+        color: {PRIMARY_BLUE} !important;
+        border: 1px solid {PRIMARY_BLUE} !important;
     }}
 
-    /* ボタン */
+    .stSelectbox label, .stDateInput label, .stMultiSelect label, .stSlider label {{
+        font-size: 0.9rem !important; font-weight: 700 !important; color: #333 !important;
+    }}
+
     div.stButton > button {{
-        width: 100%;
-        border-radius: 10px;
-        font-weight: 700;
-        height: 3rem;
-        background: linear-gradient(135deg, {PRIMARY} 0%, #003366 100%);
-        color: white;
-        border: none;
-        box-shadow: 0 4px 10px rgba(0, 76, 153, 0.2);
-        transition: all 0.3s;
+        width: 100%; border-radius: 12px; font-weight: 800; font-size: 1.1rem; height: 3.5rem;
+        background: linear-gradient(90deg, {PRIMARY_BLUE} 0%, {LIGHT_BLUE} 100%);
+        color: white; border: none; margin-top: 28px;
+        box-shadow: 0 4px 10px rgba(14, 77, 146, 0.2); transition: all 0.2s;
     }}
     div.stButton > button:hover {{
-        box-shadow: 0 6px 15px rgba(0, 76, 153, 0.3);
-        transform: scale(1.02);
+        background: linear-gradient(90deg, {LIGHT_BLUE} 0%, {PRIMARY_BLUE} 100%);
+        transform: scale(1.02); box-shadow: 0 6px 15px rgba(14, 77, 146, 0.3); color: white;
     }}
-    
-    /* エラーアラート */
-    .stAlert {{
-        box-shadow: 0 4px 10px rgba(0,0,0,0.05);
-        border-radius: 10px;
+
+    .result-card {{
+        background-color: {CARD_BG}; padding: 24px; border-radius: 16px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 20px;
+        border: 1px solid #EBEBEB; transition: transform 0.2s;
     }}
+    .result-card:hover {{
+        transform: translateY(-3px); box-shadow: 0 8px 20px rgba(0,0,0,0.1);
+    }}
+    .rank-badge {{
+        display: inline-block; padding: 4px 12px; border-radius: 20px;
+        color: white; font-weight: bold; font-size: 0.9rem; margin-left: 10px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.15);
+    }}
+    .fish-tag {{
+        display: inline-flex; align-items: center; background-color: #E8F0FE;
+        color: {PRIMARY_BLUE}; padding: 4px 10px; border-radius: 8px;
+        font-size: 0.8rem; font-weight: 600; margin-right: 6px; margin-top: 8px;
+    }}
+    .weather-box {{
+        margin-top: 15px; background-color: #F7F7F7; border-radius: 12px;
+        padding: 12px; display: flex; justify-content: space-around; align-items: center;
+    }}
+    .weather-item {{ display: flex; flex-direction: column; align-items: center; }}
+    .weather-label {{ font-size: 0.75rem; color: #717171; margin-bottom: 2px; }}
+    .weather-val {{ font-weight: bold; color: #222; font-size: 1rem; }}
+    .stAlert {{ border-radius: 12px; }}
 
 </style>
 """, unsafe_allow_html=True)
@@ -251,7 +231,7 @@ def get_top_fish_html(fish_breakdown):
     for name, score in sorted_fish:
         if score > 0.1:
             has_fish = True
-            html += f'<span class="fish-tag">{name}<span class="fish-score">{score:.1f}</span></span>'
+            html += f'<span class="fish-tag">{name} {score:.1f}</span>'
     html += '</div>'
     return html if has_fish else ""
 
@@ -276,32 +256,32 @@ def plot_map(data, date_str):
         
         cpue = item['total_cpue']
         size = 350 + (cpue * 45)
-        colors = {'S':'#e74c3c', 'A':'#e67e22', 'B':'#f1c40f', 'C':'#2ecc71', 'D':'#95a5a6'}
+        colors = {'S':'#FF385C', 'A':'#FF9F1C', 'B':'#FFD93D', 'C':'#6FCF97', 'D':'#AAB7B8'}
         color = colors.get(item['rank'], 'gray')
         
-        ax.scatter(x+0.003, y-0.003, s=size, c='black', alpha=0.15, zorder=9, edgecolors='none')
+        ax.scatter(x+0.003, y-0.003, s=size, c='black', alpha=0.1, zorder=9, edgecolors='none')
         ax.scatter(x, y, s=size, c=color, alpha=0.9, edgecolors='white', linewidth=2.5, zorder=10)
         
         label_txt = f"{item['name']}\n{cpue:.1f}"
         ax.text(x, y-0.015, label_txt, fontsize=12, fontweight='bold', ha='center', va='top', 
-                 color='white', path_effects=[pe.withStroke(linewidth=3, foreground="#2c3e50")], zorder=11)
+                 color='white', path_effects=[pe.withStroke(linewidth=3, foreground="#484848")], zorder=11)
     return fig
 
 def plot_trend_chart(df, threshold=10.0):
     fig, ax = plt.subplots(figsize=(9, 4))
     fig.patch.set_alpha(0)
-    ax.set_facecolor(SECONDARY)
+    ax.set_facecolor(BG_COLOR)
     ax.grid(True, linestyle=':', color='#ccc', alpha=0.7)
     
     ax.plot(df['date_dt'], df['total_cpue'], marker='o', markersize=8, 
-            linestyle='-', linewidth=3, color=PRIMARY, label='CPUE')
+            linestyle='-', linewidth=3, color=PRIMARY_BLUE, label='CPUE')
     
-    ax.axhline(y=threshold, color=ACCENT, linestyle='--', linewidth=1.5, alpha=0.8, label='Aランク')
+    ax.axhline(y=threshold, color='#FF385C', linestyle='--', linewidth=1.5, alpha=0.8, label='Aランク')
     
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
-    ax.spines['left'].set_color('#888')
-    ax.spines['bottom'].set_color('#888')
+    ax.spines['left'].set_visible(False)
+    ax.spines['bottom'].set_visible(False)
     
     ax.tick_params(axis='x', colors='#555', rotation=0)
     ax.tick_params(axis='y', colors='#555')
@@ -314,7 +294,8 @@ def plot_trend_chart(df, threshold=10.0):
 # 4. メインレイアウト
 # -------------------------------------------
 
-st.markdown("""
+# ヒーローヘッダー
+st.markdown(f"""
 <div class="hero-container">
     <div class="main-title">TOKYO BAY FISHING AI 🐟</div>
     <div class="sub-title">AIによる気象・海況ビッグデータ分析</div>
@@ -322,63 +303,68 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# ⚙️ 検索コントロールパネル
+# 🔎 検索パネル
 # ==========================================
-with st.expander("🔎 検索条件を設定する", expanded=True):
-    
-    mode_mapping = {
-        "🤔 日程は決まっている (どこに行く？)": "mode_date_fixed",
-        "📅 行きたい場所がある (いつ行く？)": "mode_place_fixed"
-    }
-    
-    selected_label = st.radio(
-        "目的を選んでください",
-        list(mode_mapping.keys()),
-        horizontal=True,
-        label_visibility="collapsed"
-    )
-    mode = mode_mapping[selected_label]
-    
-    st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
-    
-    points = ["浦安", "若洲", "市原", "東扇島", "大黒", "磯子"]
-    
-    if mode == "mode_date_fixed":
-        c1, c2, c3 = st.columns([1, 2, 1])
-        with c1:
-            st.markdown("**📅 日程**")
-            target_date = st.date_input("date_input", datetime.date.today() + datetime.timedelta(days=1), label_visibility="collapsed")
-        with c2:
-            st.markdown("**📍 候補エリア**")
-            selected_points = st.multiselect("multi_select", points, default=points, label_visibility="collapsed")
-        with c3:
-            st.markdown("&nbsp;") 
-            execute_btn = st.button("予測を実行 🚀", key="btn1")
+tab_date, tab_place = st.tabs(["🤔 日程から探す", "📍 場所から探す"])
 
-    else:
-        c1, c2, c3 = st.columns([1, 1.5, 1])
-        with c1:
-            st.markdown("**📍 場所**")
-            target_place = st.selectbox("place_select", points, label_visibility="collapsed")
-        with c2:
-            st.markdown("**📅 開始日 & 期間**")
-            col_in1, col_in2 = st.columns(2)
-            with col_in1:
-                start_date = st.date_input("start_date", datetime.date.today() + datetime.timedelta(days=1), label_visibility="collapsed")
-            with col_in2:
-                period = st.slider("days_slider", 3, 14, 7, label_visibility="collapsed")
-        with c3:
-            st.markdown("&nbsp;") 
-            execute_btn = st.button("ベスト日程を探す 🔍", key="btn2")
+mode = None
+execute_btn = False
+
+# --- タブ1: 日程が決まっている場合 ---
+with tab_date:
+    with st.container():
+        st.markdown("##### 📅 いつ、どこに行きますか？")
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col1:
+            target_date = st.date_input(
+                "日程",
+                datetime.date.today() + datetime.timedelta(days=1),
+                help="予測したい日付を選択してください"
+            )
+        with col2:
+            points_list = ["浦安", "若洲", "市原", "東扇島", "大黒", "磯子"]
+            selected_points = st.multiselect(
+                "候補エリア",
+                points_list,
+                default=points_list,
+                placeholder="エリアを選択..."
+            )
+        with col3:
+            if st.button("検索する", key="btn_date_search"):
+                mode = "mode_date_fixed"
+                execute_btn = True
+
+# --- タブ2: 場所が決まっている場合 ---
+with tab_place:
+    with st.container():
+        st.markdown("##### 🎣 どこで、ベストな日を探しますか？")
+        col1, col2, col3, col4 = st.columns([1.2, 1, 1.2, 1])
+        
+        with col1:
+            points_list = ["浦安", "若洲", "市原", "東扇島", "大黒", "磯子"]
+            target_place = st.selectbox("場所", points_list)
+            
+        with col2:
+            start_date = st.date_input(
+                "開始日",
+                datetime.date.today() + datetime.timedelta(days=1)
+            )
+            
+        with col3:
+            period = st.slider("期間 (向こう何日間)", 3, 14, 7)
+
+        with col4:
+            if st.button("ベスト日程を探す", key="btn_place_search"):
+                mode = "mode_place_fixed"
+                execute_btn = True
+
+st.markdown("<div style='margin-bottom: 30px;'></div>", unsafe_allow_html=True)
 
 # -------------------------------------------
 # 5. 結果表示エリア
 # -------------------------------------------
 
 if execute_btn:
-    st.divider()
-    
-    # 🚨 日程チェック
     today = datetime.date.today()
     limit_days = 14
     limit_date = today + datetime.timedelta(days=limit_days)
@@ -397,7 +383,6 @@ if execute_btn:
         )
         st.stop()
         
-    # --- モード1: 日付から場所 ---
     if mode == "mode_date_fixed":
         if not selected_points:
             st.warning("場所を少なくとも1つ選んでください")
@@ -406,84 +391,31 @@ if execute_btn:
                 results = predictor.run_prediction(target_date.strftime("%Y-%m-%d"), selected_points)
             
             if results:
+                st.markdown(f"### 📅 {target_date.strftime('%Y/%m/%d')} の予測結果")
                 c_map, c_list = st.columns([1.2, 1])
                 
                 with c_map:
-                    st.subheader("🗺️ エリアポテンシャル")
+                    st.caption("エリアポテンシャルマップ")
                     fig_map = plot_map(results, target_date)
                     st.pyplot(fig_map)
                 
                 with c_list:
-                    st.subheader("🏆 推奨ランキング")
+                    st.caption("推奨ランキング")
                     df_res = pd.DataFrame(results).sort_values('total_cpue', ascending=False)
                     
                     for i, row in df_res.iterrows():
-                        r_color = {'S':'#e74c3c', 'A':'#e67e22', 'B':'#f1c40f', 'C':'#2ecc71', 'D':'#95a5a6'}.get(row['rank'], '#999')
+                        r_color = {'S':'#FF385C', 'A':'#FF9F1C', 'B':'#FFD93D', 'C':'#6FCF97', 'D':'#AAB7B8'}.get(row['rank'], '#999')
                         fish_html = get_top_fish_html(row.get('fish_breakdown', {}))
                         
                         st.markdown(f"""
-<div class="result-card rank-{row['rank']}">
+<div class="result-card">
     <div style="display:flex; justify-content:space-between; align-items:center;">
-        <div>
-            <span style="font-size:1.1rem; font-weight:bold;">{row['name']}</span>
+        <div style="display:flex; align-items:center;">
+            <span style="font-size:1.2rem; font-weight:bold;">{row['name']}</span>
             <span class="rank-badge" style="background-color:{r_color};">{row['rank']}</span>
         </div>
-        <div style="font-size:1.4rem; font-weight:900; color:{r_color};">{row['total_cpue']:.1f}</div>
+        <div style="font-size:1.5rem; font-weight:900; color:{r_color};">{row['total_cpue']:.1f}</div>
     </div>
-    <div class="weather-box" style="margin-top:10px;">
-        <div class="weather-item">
-            <span class="weather-label">天気</span>
-            <span class="weather-val">{row['weather']}</span>
-        </div>
-        <div class="weather-item">
-            <span class="weather-label">風速</span>
-            <span class="weather-val">{row['wind']:.1f}m</span>
-        </div>
-        <div class="weather-item">
-            <span class="weather-label">気温</span>
-            <span class="weather-val">{row['temp']:.1f}℃</span>
-        </div>
-    </div>
-    {fish_html}
-</div>
-""", unsafe_allow_html=True)
-
-    # --- モード2: 場所から日程 ---
-    else:
-        with st.spinner(f'{target_place} の向こう {period} 日間を解析中...'):
-            period_results = predictor.run_period_analysis(
-                target_place, 
-                start_date.strftime("%Y-%m-%d"), 
-                period
-            )
-        
-        if period_results:
-            df_period = pd.DataFrame(period_results)
-            df_period['date_dt'] = pd.to_datetime(df_period['date'])
-            df_period = df_period.sort_values('date_dt')
-            
-            st.subheader(f"📈 {target_place} の釣果予測推移")
-            fig_chart = plot_trend_chart(df_period)
-            st.pyplot(fig_chart)
-            
-            st.subheader("✨ おすすめ日程 Top 3")
-            best_days = df_period.sort_values('total_cpue', ascending=False).head(3)
-            
-            cols = st.columns(3)
-            for i, (idx, row) in enumerate(best_days.iterrows()):
-                r_color = {'S':'#e74c3c', 'A':'#e67e22', 'B':'#f1c40f', 'C':'#2ecc71', 'D':'#95a5a6'}.get(row['rank'], '#999')
-                fish_html = get_top_fish_html(row.get('fish_breakdown', {}))
-
-                with cols[i]:
-                    st.markdown(f"""
-<div class="result-card rank-{row['rank']}" style="text-align:center;">
-    <div style="font-size:1.5rem; font-weight:900; color:#333; margin-bottom:5px;">
-        {row['date'][5:]}
-    </div>
-    <div style="font-size:2.2rem; font-weight:900; color:{r_color}; line-height:1;">
-        {row['total_cpue']:.1f}
-    </div>
-    <span class="rank-badge" style="background-color:{r_color}; margin:5px 0 10px 0;">{row['rank']}</span>
     <div class="weather-box">
         <div class="weather-item">
             <span class="weather-label">天気</span>
@@ -498,7 +430,58 @@ if execute_btn:
             <span class="weather-val">{row['temp']:.1f}℃</span>
         </div>
     </div>
-    {fish_html}
+    {{fish_html}}
+</div>
+""", unsafe_allow_html=True)
+
+    elif mode == "mode_place_fixed":
+        with st.spinner(f'{{target_place}} の向こう {{period}} 日間を解析中...'):
+            period_results = predictor.run_period_analysis(
+                target_place, 
+                start_date.strftime("%Y-%m-%d"), 
+                period
+            )
+        
+        if period_results:
+            df_period = pd.DataFrame(period_results)
+            df_period['date_dt'] = pd.to_datetime(df_period['date'])
+            df_period = df_period.sort_values('date_dt')
+            
+            st.markdown(f"### 📈 {{target_place}} の釣果予測推移")
+            fig_chart = plot_trend_chart(df_period)
+            st.pyplot(fig_chart)
+            
+            st.markdown("#### ✨ おすすめ日程 Top 3")
+            best_days = df_period.sort_values('total_cpue', ascending=False).head(3)
+            
+            cols = st.columns(3)
+            for i, (idx, row) in enumerate(best_days.iterrows()):
+                r_color = {'S':'#FF385C', 'A':'#FF9F1C', 'B':'#FFD93D', 'C':'#6FCF97', 'D':'#AAB7B8'}.get(row['rank'], '#999')
+                fish_html = get_top_fish_html(row.get('fish_breakdown', {}))
+
+                with cols[i]:
+                    st.markdown(f"""
+<div class="result-card" style="text-align:center;">
+    <div style="font-size:1.3rem; font-weight:800; color:#333; margin-bottom:5px;">
+        {{row['date'][5:].replace('-','/')}}
+    </div>
+    <div style="font-size:2.5rem; font-weight:900; color:{{r_color}}; line-height:1;">
+        {{row['total_cpue']:.1f}}
+    </div>
+    <div style="margin: 10px 0;">
+        <span class="rank-badge" style="background-color:{{r_color}}; margin:0;">{{row['rank']}}</span>
+    </div>
+    <div class="weather-box">
+        <div class="weather-item">
+            <span class="weather-label">天気</span>
+            <span class="weather-val">{{row['weather']}}</span>
+        </div>
+        <div class="weather-item">
+            <span class="weather-label">風速</span>
+            <span class="weather-val">{{row['wind']:.1f}}m</span>
+        </div>
+    </div>
+    {{fish_html}}
 </div>
 """, unsafe_allow_html=True)
             
