@@ -66,7 +66,6 @@ class FishingPredictor:
                 if os.path.exists(path):
                     self.models[key] = joblib.load(path)
 
-    # 判定基準をカード側に統一
     def evaluate_cpue_total_scaled(self, val):
         if val >= 20.0: return "S"
         if val >= 10.0: return "A"
@@ -152,6 +151,7 @@ class FishingPredictor:
             cand_row = df_cand[df_cand['time'] == pd.to_datetime(date_str)]
             if len(cand_row) == 0: continue
             cand_row = cand_row.iloc[0]
+            # カード側の判定式と完全に一致
             diff = abs(t_wind - cand_row['wind_speed_10m_max']) * 2.0 + abs(t_temp - cand_row['temperature_2m_mean'])
             if diff < min_score: min_score = diff; best_facility = facility
         return best_facility
@@ -193,9 +193,6 @@ class FishingPredictor:
                 except: pass
         return weather_cache
 
-    # ==========================================
-    # 🎯 モード1: 特定の日付で、全地点を比較
-    # ==========================================
     def run_prediction(self, target_date_str, target_points):
         analysis_data = []
         target_dt = pd.to_datetime(target_date_str)
@@ -206,9 +203,8 @@ class FishingPredictor:
         if last_marine_date is None: 
             last_marine_date = datetime.datetime.now() - datetime.timedelta(days=1)
         
-        # シミュレーション開始日は観測の翌日
+        # 【重要】開始日は観測の翌日。これで計算回数が一致する
         sim_start_dt = last_marine_date + datetime.timedelta(days=1)
-        # ターゲット日が過去すぎる場合のセーフティ
         if target_dt < sim_start_dt:
             sim_start_dt = target_dt - datetime.timedelta(days=5)
 
@@ -228,7 +224,6 @@ class FishingPredictor:
             c_cache = {k: v for k, v in global_weather_cache.items() if k in CANDIDATE_FACILITIES}
 
             final_result = None
-            # カード側と同じ「積み上げシミュレーション」
             for i, row in df_w.iterrows():
                 date = row['time']
                 d_str = date.strftime('%Y-%m-%d')
@@ -251,7 +246,7 @@ class FishingPredictor:
                     ps = m['salt'].predict(self.match_features(m['salt'], pool))[0] if 'salt' in m else current['salt']
                     pd_val = m['do'].predict(self.match_features(m['do'], pool))[0] if 'do' in m else current['do']
                     pt = max(0.1, pt)
-                    # カード側で追加された特徴量を反映
+                    # カード側独自の「水温差」を追加
                     pool.update({'予測水温': pw, '水温': pw, '前日との水温差': pw - current['water_temp'], '濁度': pt, '塩分': ps, 'DO': pd_val})
                 except: pw, pt, ps, pd_val = current.values()
 
@@ -261,7 +256,7 @@ class FishingPredictor:
                     fish_group_map = {}
                     total_cpue = 0
                     
-                    # Group1の合計値を特徴量として持たせる
+                    # 魚種別計算ロジック（G1を特徴量として次に渡す手順）を完全に一致
                     g1_sum = 0
                     if "G1" in self.models:
                         m, e = self.models["G1"], self.encoders["G1"]
@@ -278,7 +273,6 @@ class FishingPredictor:
                     pool['Group1_Total_CPUE'] = g1_sum
                     total_cpue = g1_sum
                     
-                    # G2-G4計算
                     for g_name in ["G2", "G3", "G4"]:
                         if g_name in self.models:
                             m, e = self.models[g_name], self.encoders[g_name]
@@ -301,7 +295,6 @@ class FishingPredictor:
                         "weather": w_label, "temp": pw, "wind": row.get('wind_speed_10m_max', 0),
                         "rank": self.evaluate_cpue_total_scaled(total_cpue)
                     }
-                # 環境数値を更新して次の日へ
                 current = {"water_temp": pw, "turbidity": pt, "salt": ps, "do": pd_val}
             
             if final_result: analysis_data.append(final_result)
@@ -312,15 +305,12 @@ class FishingPredictor:
         results = []
         start_dt = pd.to_datetime(start_date_str)
         end_dt = start_dt + datetime.timedelta(days=days)
-        
         ref_coords = self.get_coordinates(place_name)
         if not ref_coords: return []
-        
         self.fetch_weather_forecast_range(ref_coords[0], ref_coords[1], start_dt, end_dt)
         for cand in CANDIDATE_FACILITIES:
             cc = self.get_coordinates(cand)
             if cc: self.fetch_weather_forecast_range(cc[0], cc[1], start_dt, end_dt)
-        
         for i in range(days):
             target_dt = start_dt + datetime.timedelta(days=i)
             d_str = target_dt.strftime('%Y-%m-%d')
