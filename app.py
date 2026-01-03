@@ -11,6 +11,11 @@ import shutil
 import base64
 import streamlit.components.v1 as components
 
+# --- 追加ライブラリ（HTML注入用） ---
+import pathlib
+from bs4 import BeautifulSoup
+import logging
+
 # ロジックファイルからクラスをインポート
 from logic import FishingPredictor, MAP_EXTENT, VISUAL_OFFSETS
 
@@ -33,11 +38,15 @@ target_image_name = "sea_view.png"
 img_b64 = get_img_as_base64(target_image_name)
 
 # -------------------------------------------
-# 0. Google Analytics 設定
+# 0. Analytics & Clarity 設定 (index.html注入方式)
 # -------------------------------------------
-def inject_ga():
+def inject_ga_and_clarity():
+    # ID設定
     GA_ID = "G-3L2NXKM7YT"
-    ga_code = f"""
+    CLARITY_ID = "uvovjbyie6"
+
+    # 1. Google Analytics Code
+    ga_js = f"""
     <script async src="https://www.googletagmanager.com/gtag/js?id={GA_ID}"></script>
     <script>
         window.dataLayer = window.dataLayer || [];
@@ -46,7 +55,36 @@ def inject_ga():
         gtag('config', '{GA_ID}');
     </script>
     """
-    components.html(ga_code, height=0)
+
+    # 2. Microsoft Clarity Code
+    clarity_js = f"""
+    <script type="text/javascript">
+        (function(c,l,a,r,i,t,y){{
+            c[a]=c[a]||function(){{(c[a].q=c[a].q||[]).push(arguments)}};
+            t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+            y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+        }})(window, document, "clarity", "script", "{CLARITY_ID}");
+    </script>
+    """
+
+    # index.htmlのパスを取得
+    index_path = pathlib.Path(st.__file__).parent / "static" / "index.html"
+    
+    try:
+        # htmlを読み込む
+        soup = BeautifulSoup(index_path.read_text(), features="html.parser")
+        
+        # すでに挿入済みかチェック (重複防止)
+        # ClarityのIDが含まれていなければ挿入する
+        if CLARITY_ID not in str(soup):
+            # headタグの先頭に挿入
+            if soup.head:
+                soup.head.insert(0, BeautifulSoup(ga_js + clarity_js, "html.parser"))
+                index_path.write_text(str(soup))
+                logging.info("Analytics & Clarity tags injected successfully.")
+    except Exception as e:
+        # ローカル環境など権限がない場合はエラーをログに出すだけにする
+        logging.error(f"Analytics injection failed: {e}")
 
 # -------------------------------------------
 # 1. 日本語フォント設定
@@ -71,7 +109,7 @@ def setup_japanese_font():
 setup_japanese_font()
 
 # -------------------------------------------
-# 2. ページ設定
+# 2. ページ設定 & 計測タグ注入
 # -------------------------------------------
 st.set_page_config(
     page_title="東京湾釣り予報AI",
@@ -80,7 +118,8 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-inject_ga()
+# ここでタグ注入を実行
+inject_ga_and_clarity()
 
 # カラー定義
 PRIMARY_BLUE = "#0e4d92"
@@ -262,7 +301,6 @@ def plot_map(data, date_str):
         ax.scatter(x+0.003, y-0.003, s=size, c='black', alpha=0.1, zorder=9, edgecolors='none')
         ax.scatter(x, y, s=size, c=color, alpha=0.9, edgecolors='white', linewidth=2.5, zorder=10)
         
-        # --- 変更点: 数値の後に「匹」を追加 ---
         label_txt = f"{item['name']}\n{cpue:.1f}匹"
         
         ax.text(x, y-0.015, label_txt, fontsize=12, fontweight='bold', ha='center', va='top', 
@@ -337,6 +375,8 @@ with tab_date:
             if st.button("検索する", key="btn_date_search"):
                 mode = "mode_date_fixed"
                 execute_btn = True
+                # 【操作ログ記録】
+                print(f"[{datetime.datetime.now()}] ACTION: DateSearch | Date: {target_date} | Areas: {selected_points}")
 
 # --- タブ2: 場所が決まっている場合 ---
 with tab_place:
@@ -362,6 +402,8 @@ with tab_place:
             if st.button("ベスト日程を探す", key="btn_place_search"):
                 mode = "mode_place_fixed"
                 execute_btn = True
+                # 【操作ログ記録】
+                print(f"[{datetime.datetime.now()}] ACTION: PlaceSearch | Place: {target_place} | Start: {start_date} | Period: {period}")
 
 st.markdown("<div style='margin-bottom: 30px;'></div>", unsafe_allow_html=True)
 
@@ -420,7 +462,6 @@ if execute_btn:
                         r_color = {'S':'#FF385C', 'A':'#FF9F1C', 'B':'#FFD93D', 'C':'#6FCF97', 'D':'#AAB7B8'}.get(row['rank'], '#999')
                         fish_html_content = get_top_fish_html(row.get('fish_breakdown', {}))
                         
-                        # --- 変更点: 数値のラベルと単位を追加 ---
                         card_html = f"""
                         <div class="result-card">
                             <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -480,7 +521,6 @@ if execute_btn:
                 display_date = row['date'][5:].replace('-', '/')
 
                 with cols[i]:
-                    # --- 変更点: 数値のラベルと単位を追加 ---
                     day_card_html = f"""
                     <div class="result-card" style="text-align:center;">
                         <div style="font-size:1.3rem; font-weight:800; color:#333; margin-bottom:5px;">
@@ -513,4 +553,5 @@ if execute_btn:
                     st.markdown(day_card_html, unsafe_allow_html=True)
             
             with st.expander("📋 データ一覧を表示"):
-                st.dataframe(df_period[['date', 'rank', 'total_cpue', 'weather', 'wind', 'temp']], use_container_width=True)
+                # Warning修正: use_container_width=True -> width='stretch'
+                st.dataframe(df_period[['date', 'rank', 'total_cpue', 'weather', 'wind', 'temp']], width='stretch')
