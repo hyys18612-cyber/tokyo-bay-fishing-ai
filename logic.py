@@ -157,20 +157,66 @@ class FishingPredictor:
         return best_facility
 
     def get_latest_marine_data(self, target_lat, target_lon):
-        # 距離計算をカード側のロジックに変更
+        """
+        修正版: 指定された観測地点のエクセルファイルから、最新の日付データを全て取得し、
+        その日の平均値を計算して返す。
+        """
+        # 1. 距離計算して適切な観測局を選択
         def calc_dist(lat1, lon1, lat2, lon2): return np.sqrt((lat1 - lat2)**2 + (lon1 - lon2)**2)
         dk = calc_dist(target_lat, target_lon, STATIONS["kawasaki"]["lat"], STATIONS["kawasaki"]["lon"])
         d1 = calc_dist(target_lat, target_lon, STATIONS["1goto"]["lat"], STATIONS["1goto"]["lon"])
         st = STATIONS["kawasaki"] if dk < d1 else STATIONS["1goto"]
         
+        # ファイルが存在しない場合はNoneを返す
         if not os.path.exists(st['file']):
             return None, None
+            
         try:
             df = pd.read_excel(st['file'])
-            lr = df.iloc[-1]
-            vals = {"water_temp": lr['水温(上層)(℃)'], "turbidity": lr['濁度(上層)(NTU)'], "do": lr['DO(上層)(mg/L)'], "salt": lr['塩分(上層)(-)']}
-            return vals, pd.to_datetime(lr.iloc[0])
-        except: return None, None
+            if df.empty:
+                return None, None
+
+            # 2. 日付カラムの処理（1列目が日時と仮定）
+            # エラーがあっても強制的に変換（パースできない行はNaTになる）
+            df['temp_datetime'] = pd.to_datetime(df.iloc[:, 0], errors='coerce')
+            
+            # 日付が無効な行を削除
+            df = df.dropna(subset=['temp_datetime'])
+            if df.empty:
+                return None, None
+
+            # 3. 最新の日付（Last Date）を特定
+            last_full_dt = df['temp_datetime'].max()
+            last_date = last_full_dt.date()
+
+            # 4. その最新日と同じ日付のデータのみを抽出
+            day_mask = df['temp_datetime'].dt.date == last_date
+            df_latest = df[day_mask]
+
+            # 5. 各パラメータの平均値を計算
+            # カラム名定義
+            cols = {
+                "water_temp": '水温(上層)(℃)',
+                "turbidity": '濁度(上層)(NTU)',
+                "do": 'DO(上層)(mg/L)',
+                "salt": '塩分(上層)(-)'
+            }
+            
+            vals = {}
+            for key, col_name in cols.items():
+                if col_name in df_latest.columns:
+                    # 文字列などが混入していても数値に強制変換して平均をとる
+                    numeric_vals = pd.to_numeric(df_latest[col_name], errors='coerce')
+                    vals[key] = numeric_vals.mean()
+                else:
+                    # カラムが見つからない場合はNone（後の処理でデフォルト値が使われる）
+                    vals[key] = None
+
+            return vals, last_full_dt
+            
+        except Exception:
+            # 万が一のエラー時はWebサイトを止めないためにNoneを返す
+            return None, None
 
     def prepare_weather_data_parallel(self, points, start_dt, end_dt):
         unique_locs = set(points) | set(CANDIDATE_FACILITIES)
@@ -197,7 +243,7 @@ class FishingPredictor:
         analysis_data = []
         target_dt = pd.to_datetime(target_date_str)
         
-        # 基準日決定ロジックをカード側と完全に一致させる
+        # 基準日決定ロジック
         ref_coords = self.get_coordinates("川崎") 
         _, last_marine_date = self.get_latest_marine_data(ref_coords[0], ref_coords[1])
         if last_marine_date is None: 
@@ -215,8 +261,15 @@ class FishingPredictor:
             if not coords: continue
 
             current, _ = self.get_latest_marine_data(coords[0], coords[1])
-            if current is None:
+            
+            # データ取得失敗時のデフォルト値
+            if current is None or current.get("water_temp") is None:
                 current = {"water_temp": 12.0, "turbidity": 2.5, "salt": 31.5, "do": 9.5}
+            # NaNが含まれている場合の安全策（念のため）
+            if pd.isna(current["water_temp"]): current["water_temp"] = 12.0
+            if pd.isna(current["turbidity"]): current["turbidity"] = 2.5
+            if pd.isna(current["salt"]): current["salt"] = 31.5
+            if pd.isna(current["do"]): current["do"] = 9.5
 
             df_w = global_weather_cache.get(place_name)
             if df_w is None: continue
