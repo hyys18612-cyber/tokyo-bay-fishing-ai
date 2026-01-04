@@ -24,9 +24,34 @@ VISUAL_OFFSETS = {
     "東扇島": {"lon": 0.0, "lat": 0.0}
 }
 
+# ---------------------------------------------------------
+# 修正箇所: 新しい観測地点（千葉灯標、浦安）を追加
+# ---------------------------------------------------------
 STATIONS = {
-    "kawasaki": {"name": "川崎人工島", "lat": 35.49028, "lon": 139.83389, "file": "kawasaki_environment.xlsx"},
-    "1goto": {"name": "1号灯標", "lat": 35.53694, "lon": 139.95417, "file": "1goto_environment.xlsx"}
+    "kawasaki": {
+        "name": "川崎人工島",
+        "lat": 35.49028,
+        "lon": 139.83389,
+        "file": "kawasaki_environment.xlsx"
+    },
+    "1goto": {
+        "name": "1号灯標",
+        "lat": 35.53694,
+        "lon": 139.95417,
+        "file": "1goto_environment.xlsx"
+    },
+    "chibaharo": {
+        "name": "千葉灯標",
+        "lat": 35.61083,
+        "lon": 140.02333,
+        "file": "chibaharo_environment.xlsx"
+    },
+    "urayasu": {
+        "name": "浦安",
+        "lat": 35.64000,
+        "lon": 139.94167,
+        "file": "urayasu_environment.xlsx"
+    }
 }
 
 KNOWN_LOCATIONS = {
@@ -161,14 +186,25 @@ class FishingPredictor:
         修正版: 指定された観測地点のエクセルファイルから、最新の日付データを全て取得し、
         その日の平均値を計算して返す。
         """
-        # 1. 距離計算して適切な観測局を選択
-        def calc_dist(lat1, lon1, lat2, lon2): return np.sqrt((lat1 - lat2)**2 + (lon1 - lon2)**2)
-        dk = calc_dist(target_lat, target_lon, STATIONS["kawasaki"]["lat"], STATIONS["kawasaki"]["lon"])
-        d1 = calc_dist(target_lat, target_lon, STATIONS["1goto"]["lat"], STATIONS["1goto"]["lon"])
-        st = STATIONS["kawasaki"] if dk < d1 else STATIONS["1goto"]
+        # ---------------------------------------------------------
+        # 修正箇所: 最も近いステーションを全候補から探索するロジックに変更
+        # ---------------------------------------------------------
+        def calc_dist(lat1, lon1, lat2, lon2): 
+            return np.sqrt((lat1 - lat2)**2 + (lon1 - lon2)**2)
+        
+        best_station = None
+        min_dist = float('inf')
+        
+        for key, station in STATIONS.items():
+            dist = calc_dist(target_lat, target_lon, station["lat"], station["lon"])
+            if dist < min_dist:
+                min_dist = dist
+                best_station = station
+        
+        st = best_station
         
         # ファイルが存在しない場合はNoneを返す
-        if not os.path.exists(st['file']):
+        if st is None or not os.path.exists(st['file']):
             return None, None
             
         try:
