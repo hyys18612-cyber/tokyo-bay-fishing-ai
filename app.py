@@ -7,14 +7,7 @@ from matplotlib import font_manager as fm
 import datetime
 import platform
 import os
-import shutil
 import base64
-import streamlit.components.v1 as components
-
-# --- 追加ライブラリ（HTML注入用） ---
-import pathlib
-from bs4 import BeautifulSoup
-import logging
 
 # ロジックファイルからクラスをインポート
 from logic import FishingPredictor, MAP_EXTENT, VISUAL_OFFSETS
@@ -38,15 +31,15 @@ target_image_name = "sea_view.png"
 img_b64 = get_img_as_base64(target_image_name)
 
 # -------------------------------------------
-# 0. Analytics & Clarity 設定 (index.html注入方式)
+# 0. Analytics & Clarity 設定 (st.markdown注入方式)
 # -------------------------------------------
 def inject_ga_and_clarity():
     # ID設定
     GA_ID = "G-3L2NXKM7YT"
     CLARITY_ID = "uvovjbyie6"
 
-    # 1. Google Analytics Code
-    ga_js = f"""
+    # 計測タグをHTMLとして定義
+    tracking_code = f"""
     <script async src="https://www.googletagmanager.com/gtag/js?id={GA_ID}"></script>
     <script>
         window.dataLayer = window.dataLayer || [];
@@ -54,10 +47,7 @@ def inject_ga_and_clarity():
         gtag('js', new Date());
         gtag('config', '{GA_ID}');
     </script>
-    """
 
-    # 2. Microsoft Clarity Code
-    clarity_js = f"""
     <script type="text/javascript">
         (function(c,l,a,r,i,t,y){{
             c[a]=c[a]||function(){{(c[a].q=c[a].q||[]).push(arguments)}};
@@ -67,24 +57,8 @@ def inject_ga_and_clarity():
     </script>
     """
 
-    # index.htmlのパスを取得
-    index_path = pathlib.Path(st.__file__).parent / "static" / "index.html"
-    
-    try:
-        # htmlを読み込む
-        soup = BeautifulSoup(index_path.read_text(), features="html.parser")
-        
-        # すでに挿入済みかチェック (重複防止)
-        # ClarityのIDが含まれていなければ挿入する
-        if CLARITY_ID not in str(soup):
-            # headタグの先頭に挿入
-            if soup.head:
-                soup.head.insert(0, BeautifulSoup(ga_js + clarity_js, "html.parser"))
-                index_path.write_text(str(soup))
-                logging.info("Analytics & Clarity tags injected successfully.")
-    except Exception as e:
-        # ローカル環境など権限がない場合はエラーをログに出すだけにする
-        logging.error(f"Analytics injection failed: {e}")
+    # st.markdownを使って、HTML（Javascript）をアプリに直接埋め込む
+    st.markdown(tracking_code, unsafe_allow_html=True)
 
 # -------------------------------------------
 # 1. 日本語フォント設定
@@ -109,7 +83,7 @@ def setup_japanese_font():
 setup_japanese_font()
 
 # -------------------------------------------
-# 2. ページ設定 & 計測タグ注入
+# 2. ページ設定
 # -------------------------------------------
 st.set_page_config(
     page_title="東京湾釣り予報AI",
@@ -118,7 +92,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# ここでタグ注入を実行
+# ここでタグ注入を実行（set_page_configの後に行う必要があります）
 inject_ga_and_clarity()
 
 # カラー定義
