@@ -250,9 +250,6 @@ class FishingPredictor:
         
         print(f"\n--- Starting Weather Fetch (Max Workers=1) for {len(unique_locs)} locations ---")
         
-        # ------------------------------------------------------------------
-        # 修正: サーバー環境でのAPIレート制限回避のため、max_workers=1 に設定
-        # ------------------------------------------------------------------
         with ThreadPoolExecutor(max_workers=1) as executor:
             future_to_loc = {}
             for loc_name in unique_locs:
@@ -310,7 +307,6 @@ class FishingPredictor:
 
             df_w = global_weather_cache.get(place_name)
             
-            # --- 修正: データがない場合のログ出力 ---
             if df_w is None: 
                 print(f"❌ Skipping {place_name}: Weather data not found in cache.")
                 continue
@@ -384,7 +380,9 @@ class FishingPredictor:
                         "total_cpue": total_cpue,
                         "fish_breakdown": fish_breakdown,
                         "fish_group_map": fish_group_map,
-                        "weather": w_label, "temp": pw, "wind": row.get('wind_speed_10m_max', 0),
+                        "weather": w_label, 
+                        "temp": row['temperature_2m_mean'], 
+                        "wind": row.get('wind_speed_10m_max', 0),
                         "rank": self.evaluate_cpue_total_scaled(total_cpue)
                     }
                 current = {"water_temp": pw, "turbidity": pt, "salt": ps, "do": pd_val}

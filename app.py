@@ -455,11 +455,11 @@ if execute_btn:
                                     <span class="weather-val">{row['weather']}</span>
                                 </div>
                                 <div class="weather-item">
-                                    <span class="weather-label">風速</span>
+                                    <span class="weather-label">最大風速</span>
                                     <span class="weather-val">{row['wind']:.1f}m</span>
                                 </div>
                                 <div class="weather-item">
-                                    <span class="weather-label">気温</span>
+                                    <span class="weather-label">平均気温</span>
                                     <span class="weather-val">{row['temp']:.1f}℃</span>
                                 </div>
                             </div>
@@ -517,7 +517,7 @@ if execute_btn:
                                 <span class="weather-val">{row['weather']}</span>
                             </div>
                             <div class="weather-item">
-                                <span class="weather-label">風速</span>
+                                <span class="weather-label">最大風速</span>
                                 <span class="weather-val">{row['wind']:.1f}m</span>
                             </div>
                         </div>
@@ -527,5 +527,4 @@ if execute_btn:
                     st.markdown(day_card_html, unsafe_allow_html=True)
             
             with st.expander("📋 データ一覧を表示"):
-                # Warning修正: use_container_width=True -> width='stretch'
                 st.dataframe(df_period[['date', 'rank', 'total_cpue', 'weather', 'wind', 'temp']], width='stretch')
