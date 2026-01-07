@@ -7,6 +7,7 @@ import os
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
+import time
 
 warnings.filterwarnings('ignore')
 
@@ -24,9 +25,6 @@ VISUAL_OFFSETS = {
     "東扇島": {"lon": 0.0, "lat": 0.0}
 }
 
-# ---------------------------------------------------------
-# 修正箇所: 新しい観測地点（千葉灯標、浦安）を追加
-# ---------------------------------------------------------
 STATIONS = {
     "kawasaki": {
         "name": "川崎人工島",
@@ -138,6 +136,9 @@ class FishingPredictor:
 
     @lru_cache(maxsize=128)
     def _fetch_weather_api(self, lat, lon, start_date_str, end_date_str):
+        # ログ出力: APIリクエスト開始
+        print(f"[API Request] Fetching {start_date_str} - {end_date_str} for ({lat}, {lon})")
+        
         url = "https://api.open-meteo.com/v1/forecast"
         params = {
             "latitude": lat, "longitude": lon, 
@@ -147,13 +148,22 @@ class FishingPredictor:
             "timezone": "Asia/Tokyo", "wind_speed_unit": "ms"
         }
         try:
-            res = requests.get(url, params=params, timeout=5)
+            res = requests.get(url, params=params, timeout=10) # タイムアウトを10秒に緩和
+            
+            if res.status_code != 200:
+                print(f"[API Error] Status: {res.status_code} | Reason: {res.text}")
+                return None
+            
             data = res.json()
             if "daily" in data: 
                 df = pd.DataFrame(data["daily"])
                 df['time'] = pd.to_datetime(df['time'])
                 return df
-        except: 
+            else:
+                print(f"[API Warning] No 'daily' key in response for ({lat}, {lon})")
+                
+        except Exception as e:
+            print(f"[API Exception] {e}")
             return None
         return None
 
@@ -176,19 +186,11 @@ class FishingPredictor:
             cand_row = df_cand[df_cand['time'] == pd.to_datetime(date_str)]
             if len(cand_row) == 0: continue
             cand_row = cand_row.iloc[0]
-            # カード側の判定式と完全に一致
             diff = abs(t_wind - cand_row['wind_speed_10m_max']) * 2.0 + abs(t_temp - cand_row['temperature_2m_mean'])
             if diff < min_score: min_score = diff; best_facility = facility
         return best_facility
 
     def get_latest_marine_data(self, target_lat, target_lon):
-        """
-        修正版: 指定された観測地点のエクセルファイルから、最新の日付データを全て取得し、
-        その日の平均値を計算して返す。
-        """
-        # ---------------------------------------------------------
-        # 修正箇所: 最も近いステーションを全候補から探索するロジックに変更
-        # ---------------------------------------------------------
         def calc_dist(lat1, lon1, lat2, lon2): 
             return np.sqrt((lat1 - lat2)**2 + (lon1 - lon2)**2)
         
@@ -203,7 +205,6 @@ class FishingPredictor:
         
         st = best_station
         
-        # ファイルが存在しない場合はNoneを返す
         if st is None or not os.path.exists(st['file']):
             return None, None
             
@@ -212,25 +213,17 @@ class FishingPredictor:
             if df.empty:
                 return None, None
 
-            # 2. 日付カラムの処理（1列目が日時と仮定）
-            # エラーがあっても強制的に変換（パースできない行はNaTになる）
             df['temp_datetime'] = pd.to_datetime(df.iloc[:, 0], errors='coerce')
-            
-            # 日付が無効な行を削除
             df = df.dropna(subset=['temp_datetime'])
             if df.empty:
                 return None, None
 
-            # 3. 最新の日付（Last Date）を特定
             last_full_dt = df['temp_datetime'].max()
             last_date = last_full_dt.date()
 
-            # 4. その最新日と同じ日付のデータのみを抽出
             day_mask = df['temp_datetime'].dt.date == last_date
             df_latest = df[day_mask]
 
-            # 5. 各パラメータの平均値を計算
-            # カラム名定義
             cols = {
                 "water_temp": '水温(上層)(℃)',
                 "turbidity": '濁度(上層)(NTU)',
@@ -241,23 +234,26 @@ class FishingPredictor:
             vals = {}
             for key, col_name in cols.items():
                 if col_name in df_latest.columns:
-                    # 文字列などが混入していても数値に強制変換して平均をとる
                     numeric_vals = pd.to_numeric(df_latest[col_name], errors='coerce')
                     vals[key] = numeric_vals.mean()
                 else:
-                    # カラムが見つからない場合はNone（後の処理でデフォルト値が使われる）
                     vals[key] = None
 
             return vals, last_full_dt
             
         except Exception:
-            # 万が一のエラー時はWebサイトを止めないためにNoneを返す
             return None, None
 
     def prepare_weather_data_parallel(self, points, start_dt, end_dt):
         unique_locs = set(points) | set(CANDIDATE_FACILITIES)
         weather_cache = {}
-        with ThreadPoolExecutor(max_workers=10) as executor:
+        
+        print(f"\n--- Starting Weather Fetch (Max Workers=1) for {len(unique_locs)} locations ---")
+        
+        # ------------------------------------------------------------------
+        # 修正: サーバー環境でのAPIレート制限回避のため、max_workers=1 に設定
+        # ------------------------------------------------------------------
+        with ThreadPoolExecutor(max_workers=1) as executor:
             future_to_loc = {}
             for loc_name in unique_locs:
                 coords = self.get_coordinates(loc_name)
@@ -266,26 +262,33 @@ class FishingPredictor:
                         self.fetch_weather_forecast_range, 
                         coords[0], coords[1], start_dt, end_dt
                     )] = loc_name
+                else:
+                    print(f"[Coords Error] Unknown location: {loc_name}")
+
             for future in as_completed(future_to_loc):
                 loc_name = future_to_loc[future]
                 try:
                     data = future.result()
-                    if data is not None:
+                    if data is not None and not data.empty:
                         weather_cache[loc_name] = data
-                except: pass
+                        print(f"✅ [Success] {loc_name}")
+                    else:
+                        print(f"⚠️ [Failure] {loc_name}: API returned None or Empty")
+                except Exception as e:
+                    print(f"❌ [Error] {loc_name}: {e}")
+        
+        print("--- Weather Fetch Completed ---\n")
         return weather_cache
 
     def run_prediction(self, target_date_str, target_points):
         analysis_data = []
         target_dt = pd.to_datetime(target_date_str)
         
-        # 基準日決定ロジック
         ref_coords = self.get_coordinates("川崎") 
         _, last_marine_date = self.get_latest_marine_data(ref_coords[0], ref_coords[1])
         if last_marine_date is None: 
             last_marine_date = datetime.datetime.now() - datetime.timedelta(days=1)
         
-        # 【重要】開始日は観測の翌日。これで計算回数が一致する
         sim_start_dt = last_marine_date + datetime.timedelta(days=1)
         if target_dt < sim_start_dt:
             sim_start_dt = target_dt - datetime.timedelta(days=5)
@@ -298,17 +301,19 @@ class FishingPredictor:
 
             current, _ = self.get_latest_marine_data(coords[0], coords[1])
             
-            # データ取得失敗時のデフォルト値
             if current is None or current.get("water_temp") is None:
                 current = {"water_temp": 12.0, "turbidity": 2.5, "salt": 31.5, "do": 9.5}
-            # NaNが含まれている場合の安全策（念のため）
             if pd.isna(current["water_temp"]): current["water_temp"] = 12.0
             if pd.isna(current["turbidity"]): current["turbidity"] = 2.5
             if pd.isna(current["salt"]): current["salt"] = 31.5
             if pd.isna(current["do"]): current["do"] = 9.5
 
             df_w = global_weather_cache.get(place_name)
-            if df_w is None: continue
+            
+            # --- 修正: データがない場合のログ出力 ---
+            if df_w is None: 
+                print(f"❌ Skipping {place_name}: Weather data not found in cache.")
+                continue
             
             c_cache = {k: v for k, v in global_weather_cache.items() if k in CANDIDATE_FACILITIES}
 
@@ -335,7 +340,6 @@ class FishingPredictor:
                     ps = m['salt'].predict(self.match_features(m['salt'], pool))[0] if 'salt' in m else current['salt']
                     pd_val = m['do'].predict(self.match_features(m['do'], pool))[0] if 'do' in m else current['do']
                     pt = max(0.1, pt)
-                    # カード側独自の「水温差」を追加
                     pool.update({'予測水温': pw, '水温': pw, '前日との水温差': pw - current['water_temp'], '濁度': pt, '塩分': ps, 'DO': pd_val})
                 except: pw, pt, ps, pd_val = current.values()
 
@@ -345,7 +349,6 @@ class FishingPredictor:
                     fish_group_map = {}
                     total_cpue = 0
                     
-                    # 魚種別計算ロジック（G1を特徴量として次に渡す手順）を完全に一致
                     g1_sum = 0
                     if "G1" in self.models:
                         m, e = self.models["G1"], self.encoders["G1"]
